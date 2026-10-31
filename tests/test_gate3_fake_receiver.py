@@ -66,7 +66,7 @@ def _run(tmp_path, seconds, extra_recv=(), sender_args=()):
     assert snd.returncode == 0, snd.stderr[-2000:]
     summary = json.loads(ro.strip().splitlines()[-1])
     rows = [json.loads(l) for l in out.read_text().splitlines()]
-    sent = [json.loads(l) for l in slog.read_text().splitlines()]
+    sent = [json.loads(l) for l in slog.read_text().splitlines()][1:]  # [0] = session header
     return summary, rows, sent, snd.stdout
 
 
@@ -87,7 +87,7 @@ def test_end_to_end_with_real_receiver(tmp_path):
     acts = np.array([[r["action"][k] for k in KEYS] for r in rows])
     assert np.isfinite(acts).all()
     steps = np.max(np.abs(np.diff(acts, axis=0)), axis=1)
-    assert steps.max() <= 1.8 + 1e-6, steps.max()
+    assert steps.max() <= 0.9 + 1e-6, steps.max()  # the controller's 45 deg/s at 50 Hz
     # states seen by the sender, in order, with the expected transitions
     states = [s["arms"]["right"]["state"] for s in sent]
     events = [s["arms"]["right"]["event"] for s in sent if s["arms"]["right"]["event"]]
@@ -97,14 +97,22 @@ def test_end_to_end_with_real_receiver(tmp_path):
     # seq strictly increasing, arm field right
     seqs = [s["arms"]["right"]["seq"] for s in sent]
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
-    # while released and while faulted, the sent action did not change although the hand moved
+    # while released and while faulted, the sent action does not change although the hand moves
+    rows_s = [s["arms"]["right"] for s in sent if "arms" in s]
     for st in ("HOLD", "FAULT"):
-        blocks = [s["arms"]["right"]["action"] for s in sent if s["arms"]["right"]["state"] == st]
-        assert blocks
+        run, seen = [], False
+        for r in rows_s + [{"state": None}]:
+            if r["state"] == st:
+                run.append(r["action"])
+            elif run:
+                assert all(a == run[1] for a in run[1:]), f"{st} block changed"  # [0] = transition cycle
+                seen, run = True, []
+        assert seen
     # sender stopped after the replay -> receiver goes stale and HOLDS the last action (no limp, no jump)
     stalled = [r for r in rows if r["stalled"]]
     assert stalled, "receiver never detected the stop"
     last_sent = sent[-1]["arms"]["right"]["action"]
+    assert sent[-1]["arms"]["right"]["rtt_ms"] is not None  # RTT from the echo is logged
     assert all(abs(stalled[-1]["action"][k] - last_sent[k]) < 1e-9 for k in KEYS)
 
 
@@ -154,3 +162,32 @@ def test_record_a_key_soft_move_to(tmp_path):
     t = np.array([r["t"] for r in rows])
     contiguous = np.diff(t) < 0.05
     assert np.max(np.abs(np.diff(acts, axis=0))[contiguous]) <= 1.8 + 1e-6
+
+
+def test_sender_started_first_does_not_engage_before_the_receiver(tmp_path):
+    """Grip squeezed while no receiver exists: no engagement, so the receiver's first packet is still
+    the start pose; engagement only after echoes (= the follower finished connecting)."""
+    rec = tmp_path / "input.jsonl"
+    rec.write_text("".join(f.to_json() + "\n" for f in _script()))
+    slog, out = tmp_path / "sender.jsonl", tmp_path / "recv.jsonl"
+    snd = subprocess.Popen([sys.executable, "-m", "pico_teleop.sender", "--arms", "right", "--port-offset",
+                            str(OFFSET), "--pose-set", "kitakyushu-takeei-v2", "--replay", str(rec), "--log",
+                            str(slog)], cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENV)
+    time.sleep(2.5)  # the replay is already in its "circle" phase with the grip squeezed
+    recv = subprocess.run([LEROBOT_PY, os.path.join(REPO, "tests/fake_receiver.py"), "--port", str(5701 + OFFSET),
+                           "--echo", str(5711 + OFFSET), "--seconds", "5", "--out", str(out)],
+                          capture_output=True, text=True, env=ENV, timeout=60)
+    snd.communicate(timeout=60)
+    first = json.loads(recv.stdout.strip().splitlines()[-1])["first"]
+    start = _start()
+    assert all(abs(first[k] - start[k]) < 1e-9 for k in KEYS)
+    rows = [json.loads(l) for l in slog.read_text().splitlines()][1:]
+    engaged = [r for r in rows if r["arms"]["right"]["state"] == "ENGAGED"]
+    assert engaged and all(r["arms"]["right"]["link"] == "ok" for r in engaged)
+
+
+def test_receiver_gone_stops_the_sender(tmp_path):
+    summary, rows, sent, stdout = _run(tmp_path, seconds=3.0)  # receiver quits mid-replay
+    events = [s["arms"]["right"]["event"] for s in sent if s["arms"]["right"]["event"]]
+    assert any("SENDING STOPPED" in e for e in events)
+    assert "every arm's link is down" in stdout

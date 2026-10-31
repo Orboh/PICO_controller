@@ -93,7 +93,8 @@ def pose_status(pose) -> str:
 
 def analog_ok(value: float) -> bool:
     """grip / trigger must be finite and within [0, 1] (small tolerance for float noise)."""
-    return math.isfinite(value) and -0.01 <= value <= 1.01
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and -0.01 <= value <= 1.01)
 
 
 class FreshnessTracker:

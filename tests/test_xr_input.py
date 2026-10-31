@@ -32,7 +32,7 @@ def _jit(pose, i):
     return (pose[0] + 1e-5 * (i % 7), pose[1], pose[2]) + tuple(pose[3:])
 
 
-def _phase(name, n=300, dt=0.01, t0=0.0, ts0=1):
+def _phase(name, n=600, dt=0.01, t0=0.0, ts0=1):
     out = []
     for i in range(n):
         u = i / (n - 1)
@@ -55,9 +55,9 @@ def _phase(name, n=300, dt=0.01, t0=0.0, ts0=1):
 def _all_phases():
     res, t = [], 0.0
     for k, (name, _, _) in enumerate(D.PHASES):
-        fr = _phase(name, t0=t, ts0=1 + k * 1000)
+        fr = _phase(name, t0=t, ts0=1 + k * 10000)
         res.append(D.score_phase(name, fr, fr[0].t_host))
-        t += 5.0
+        t += 8.0
     return res
 
 
@@ -65,6 +65,7 @@ def test_guided_run_passes():
     text, ok = D.format_report(_all_phases(), "TEST")
     assert ok, text
     assert "event: left frozen" in text and "event: right zero" in text and "event: stream stale" in text
+    assert "loss itself is reported" in text
 
 
 def test_swapped_sides_fail():

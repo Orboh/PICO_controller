@@ -1,6 +1,7 @@
 """Start poses from openarm-orboh pose sets (the follower aligns to the same file on connect)."""
 from __future__ import annotations
 
+import hashlib
 import os
 
 import yaml
@@ -24,3 +25,13 @@ def load_start_pose(side: str, pose_set: str | None = None, pose_sets_dir: str =
     if missing:
         raise ValueError(f"{path}: missing {missing}")
     return {f"{k}.pos": float(doc[k]) for k in JOINTS8}
+
+
+def pose_file(side: str, pose_set: str | None = None, pose_sets_dir: str = POSE_SETS) -> str:
+    return os.path.join(pose_sets_dir, pose_set or current_pose_set(pose_sets_dir), f"{side}.yaml")
+
+
+def pose_file_sha(side: str, pose_set: str | None = None, pose_sets_dir: str = POSE_SETS) -> str:
+    """First 12 hex of sha256 of the start-pose YAML: compare it with the follower PC's file."""
+    with open(pose_file(side, pose_set, pose_sets_dir), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]

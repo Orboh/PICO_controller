@@ -13,10 +13,11 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 
 | Gate | State | Still needed before hardware |
 |---|---|---|
-| 1 input-only diagnostic | tool + offline tests done | **live run with the headset**; record what the SDK does on tracking loss |
+| 1 input-only diagnostic | **PASS live** 2026-10-31, all 5 phases (log-007, `evidence/gate1`) | — (finding: a hidden controller is not detectable) |
 | 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | live check of axis signs; measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
 | 3 fake receiver | done offline (real receiver class, localhost) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
+| (all) | | decide: grip held ≥ 0.3 s to engage (trigger pulls the grip by accident, log-007) |
 | 5 hardware | **blocked** | follower-pose feedback for the anchor (log-006); safety protocol prerequisites (below); right-arm zero/sign check |
 
 Nothing in this repository has moved an arm.
@@ -32,11 +33,15 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 | **Grip, open fully (< 0.4)** | HOLD: the arm stops at the last sent target and stays there. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-60°), fully pulled = closed (0°). **Soft takeover:** after each engage the gripper does not move until the trigger "meets" its current opening (within 3°): e.g. after start the gripper is closed, so pull the trigger fully first, then let go to open. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
-| A/B/X/Y, menu, sticks | nothing | — |
+| A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
 | **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). | always |
 
 **There is no stop button on the controllers.** To stop the arm moving: open the grip. To stop
 everything: the spotter presses the emergency stop / switches off the arm PSU (safety protocol §1).
+
+**Keep both controllers in front of you while engaged; open the grip before a hand leaves the view.**
+A hidden controller is NOT detected: its reported position just stays put, then catches up when it
+is seen again (log-007), and the arm follows that catch-up (speed-limited).
 
 **FAULT:** the arm freezes and ignores your hand. You cannot see this inside the headset (no
 vibration or sound yet), so **the spotter watches the sender terminal and calls out "FAULT"**.
@@ -79,12 +84,17 @@ Preflight (all must be true):
    ss -tln | grep -E '63901|60061'     # ready when both lines appear
    ```
    (On this PC it was already running on 2026-10-31.)
-2. **Connect the headset:** PC and PICO on the same 5 GHz Wi-Fi. Find this PC's IP with `hostname -I`
+2. **Connect the headset:** PC and PICO on the same Wi-Fi (in the office: `orboh`). Find this PC's IP with `hostname -I`
    (DHCP: check every session). In the XRoboToolkit app, type it in **"PC Service:"**; wait for
-   **`Status: WORKING`**. Keep the headset on: taking it off puts it to sleep and stops the stream.
+   **`Status: WORKING`**. Then tick **Controller** and turn **sending on** (Send, or press A once).
+   **A toggles sending: do not press A again.** Close the PC Service's 3D demo window (a second
+   reader gets zeros). Keep the headset on: about 8 s after taking it off it sleeps and the stream stops.
 3. **Run the guided diagnostic** (about 1–2 min; Enter starts each phase, so put the headset on first):
    ```bash
    bash ~/projects/PICO-controller/scripts/pico_env.sh python -m pico_teleop.diag_input
+   # or one phase at a time (what worked on 2026-10-31):
+   bash ~/projects/PICO-controller/scripts/pico_env.sh python -m pico_teleop.diag_input \
+       --no-prompt --phase left --phase-seconds 30 --lead-in-s 8
    ```
    Phases: left only → right only → hide left → hide right → headset off. Follow the printed text.
    Never press the PICO/Home system button. Menu buttons are reported, not required.

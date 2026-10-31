@@ -18,15 +18,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import uuid
 import os
 import sys
 import time
 
-from .controller import ENGAGED, ArmTeleop, PicoAdapter, TeleopConfig
+from .controller import ENGAGED, HOLD, ArmTeleop, PicoAdapter, TeleopConfig
 from .kinematics import DEFAULT_TCP_OFFSET_M, DEFAULT_URDF, ArmKinematics
-from .poses import POSE_SETS, current_pose_set, load_start_pose
+from .poses import POSE_SETS, current_pose_set, load_start_pose, pose_file, pose_file_sha
 from .validate import ECHO_PORTS, FOLLOWER_LIMITS_DEG, PORTS, ActionValidator, ValidatorConfig
 from .xr_input import FreshnessTracker, ReplaySource, SdkSource
+
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
 
 class Link:
     """ZMQ PUSH (commands) + PULL (echo / soft_move_to) for one arm, like leader_agent."""
@@ -44,9 +50,11 @@ class Link:
         self.echo.setsockopt(zmq.CONFLATE, 1)
         self.echo.connect(f"tcp://{host}:{echo_port}")
         self.last_echo_t: float | None = None
+        self.first_echo_t: float | None = None          # start of the current continuous echo stream
         self.follower: dict[str, float] | None = None   # measured joints, if the receiver sends them
         self.follower_t: float | None = None
-        self.sent = self.dropped = 0
+        self.rtt_ms: float | None = None
+        self.sent = self.dropped = self.bad_echo = 0
 
     def send(self, msg: dict) -> None:
         try:
@@ -55,8 +63,9 @@ class Link:
         except self.zmq.Again:
             self.dropped += 1
 
-    def poll(self) -> dict | None:
-        """Drain echoes; return a soft_move_to command if one arrived."""
+    def poll(self, gap_s: float) -> dict | None:
+        """Drain echoes (schema-checked; bad ones are counted and dropped); return a soft_move_to
+        command if one arrived. `gap_s`: a silence longer than this restarts `first_echo_t`."""
         cmd = None
         while True:
             try:
@@ -64,12 +73,27 @@ class Link:
             except self.zmq.Again:
                 return cmd
             except (ValueError, TypeError):
+                self.bad_echo += 1
                 continue
-            self.last_echo_t = time.monotonic()
-            if isinstance(e.get("follower"), dict):  # proposals/lerobot-follower-feedback.patch
-                self.follower, self.follower_t = e["follower"], self.last_echo_t
+            if not isinstance(e, dict):
+                self.bad_echo += 1
+                continue
+            now = time.monotonic()
+            if self.last_echo_t is None or now - self.last_echo_t > gap_s:
+                self.first_echo_t = now
+            self.last_echo_t = now
+            if _finite(e.get("t_mono")):
+                self.rtt_ms = (now - float(e["t_mono"])) * 1000.0
+            fol = e.get("follower")  # proposals/lerobot-follower-feedback.patch
+            if isinstance(fol, dict) and all(_finite(fol.get(f"joint_{i}.pos")) for i in range(1, 8)):
+                self.follower, self.follower_t = {k: float(v) for k, v in fol.items() if _finite(v)}, now
             if e.get("cmd") == "soft_move_to":
-                cmd = e
+                pose = e.get("pose")
+                if isinstance(pose, dict) and all(_finite(pose.get(f"joint_{i}")) for i in range(1, 8)) \
+                        and (pose.get("gripper") is None or _finite(pose.get("gripper"))):
+                    cmd = e
+                else:
+                    self.bad_echo += 1
 
     def close(self) -> None:
         self.push.close()
@@ -94,50 +118,85 @@ class ArmChannel:
         self.last_sent = self.arm.action()
         self.seq = 0
         self.move: dict | None = None
+        self.move_deadline = 0.0
         self.last_move_id = None
+        self.link_down = False          # set after a confirmed link was lost: sending stops for good
+        self.last_refusal_t = 0.0
 
-    def link_ok(self, now: float) -> bool:
-        if self.link is None or self.link.last_echo_t is None:
-            return True  # dry run, or the receiver has not echoed yet (it echoes only after connect)
-        return now - self.link.last_echo_t <= self.link_timeout_s
+    def link_state(self, now: float) -> str:
+        """'dry' (no link) / 'waiting' (no echo yet, or not yet 0.5 s of echoes) / 'ok' / 'lost'."""
+        if self.link is None:
+            return "dry"
+        if self.link.last_echo_t is None:
+            return "waiting"
+        if now - self.link.last_echo_t > self.link_timeout_s:
+            return "lost"
+        # The receiver echoes only from its main loop, i.e. after the follower finished aligning.
+        return "ok" if now - self.link.first_echo_t >= 0.5 else "waiting"
 
     def follower_error(self, now: float) -> tuple[float, str] | None:
         """Largest |measured - last sent| over the 7 joints, if fresh feedback exists (else None)."""
         if self.link is None or self.link.follower is None or now - self.link.follower_t > 0.5:
             return None
-        errs = {k: abs(float(self.link.follower[k]) - self.last_sent[k])
+        errs = {k: abs(self.link.follower[k] - self.last_sent[k])
                 for k in self.last_sent if k != "gripper.pos" and k in self.link.follower}
         if len(errs) < 7:
             return None
         k = max(errs, key=errs.get)
         return errs[k], k
 
-    def tick(self, ctrl, fresh: bool, stream_state: str, now: float) -> tuple[dict, str | None]:
+    def _accept_move(self, cmd: dict, now: float) -> str:
+        """soft_move_to (record 'a' key): only in HOLD, pose checked against the validator limits."""
+        if self.arm.state != HOLD:
+            return f"soft_move_to ignored: arm is {self.arm.state} (only in HOLD)"
+        pose = {f"{k}.pos": float(v) for k, v in cmd["pose"].items() if k.startswith("joint_") or k == "gripper"}
+        pose.setdefault("gripper.pos", self.arm.gripper)
+        bad = [k for k, (lo, hi) in self.val.limits.items() if not lo <= pose.get(k, math.nan) <= hi]
+        if bad:
+            return f"soft_move_to ignored: {bad} outside the limits"
+        self.move = pose
+        self.move_deadline = now + float(cmd.get("duration_s") or 2.0) + 4.0  # receiver gives up then
+        return "soft_move_to: moving the HOLD target to the requested pose"
+
+    def tick(self, ctrl, fresh: bool, stream_state: str, now: float) -> tuple[dict | None, str | None]:
+        """One cycle. Returns (action sent or None if sending has stopped, event text)."""
+        if self.link_down:
+            return None, None
+        event = None
         if self.link is not None:
-            cmd = self.link.poll()
+            cmd = self.link.poll(self.link_timeout_s)
             if cmd is not None and cmd.get("cmd_id") != self.last_move_id:
                 self.last_move_id = cmd.get("cmd_id")
-                self.move = cmd
-        event = None
-        lk = self.link_ok(now)
-        if self.move is not None and self.arm.state != ENGAGED:
-            pose = {f"{k}.pos" if not k.endswith(".pos") else k: v for k, v in self.move["pose"].items()}
-            if self.arm.move_toward(pose, max_dps=self.arm.cfg.max_joint_speed_dps):
+                event = self._accept_move(cmd, now)
+        ls = self.link_state(now)
+        if ls == "lost":
+            ev = self.arm.force_fault("link lost: no echo from the receiver").event
+            self.link_down = True
+            return None, (ev or "") + " | link lost: SENDING STOPPED. Restart the follower, then the sender (runbook R2)"
+        if self.move is not None and (self.arm.state != HOLD or now > self.move_deadline):
+            self.move, event = None, "soft_move_to cancelled (left HOLD or expired)"
+        if self.move is not None:
+            if self.arm.move_toward(self.move, max_dps=self.arm.cfg.max_joint_speed_dps):
                 event, self.move = "soft_move_to: arrived at the requested pose", None
         else:
-            # A lost link counts as stale input: ENGAGED -> FAULT, and no new engagement until it is back.
-            why = "link lost: no echo from the receiver" if not lk else f"input {stream_state}"
+            ok = ls in ("ok", "dry")
+            why = "waiting for the receiver (no echo yet: follower not ready)" if not ok else f"input {stream_state}"
             fe = self.follower_error(now)
             if fe is not None and fe[0] > self.max_track_err_deg:
-                # Follower is not where we command it: never engage, and stop following.
-                why, lk = f"follower {fe[1]} is {fe[0]:.1f} deg from the command (> {self.max_track_err_deg})", False
-            event = self.arm.step(self.adapter(ctrl, fresh and lk, why)).event
+                ok, why = False, f"follower {fe[1]} is {fe[0]:.1f} deg from the command (> {self.max_track_err_deg})"
+            h = self.adapter(ctrl, fresh and ok, why)
+            out = self.arm.step(h)
+            event = out.event or event
+            squeezed = ctrl.grip >= self.arm.cfg.clutch_on if _finite(ctrl.grip) else False
+            if not ok and out.state == HOLD and squeezed and now - self.last_refusal_t > 2.0:
+                self.last_refusal_t, event = now, f"engage refused: {why}"
         action = self.arm.action()
         v = self.val.check(action, self.last_sent, self.side)
         if not v.ok:
             self.arm.reset_to(self.last_sent)
+            self.move = None
             event = self.arm.force_fault("validator: " + "; ".join(v.reasons)).event or \
-                "validator rejected a HOLD-state packet: " + "; ".join(v.reasons)
+                "validator rejected a packet (not sent): " + "; ".join(v.reasons)
             action = self.last_sent
         self.seq += 1
         if self.link is not None:
@@ -170,13 +229,14 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     a = parse_args(argv)
-    local = a.host in ("127.0.0.1", "localhost")
-    if not a.dry_run and not local and not a.confirm_follower_at_start_pose:
-        print("[sender] REFUSED: to drive a follower on another host, confirm it was started with the SAME "
-              "pose set after this pose set was chosen: --confirm-follower-at-start-pose", file=sys.stderr)
+    real_ports = not a.dry_run and a.port_offset == 0  # 5701/5702: a real follower may listen, any host
+    if real_ports and not a.confirm_follower_at_start_pose:
+        print("[sender] REFUSED: ports 5701/5702 can drive a real follower. Follow docs/hardware-runbook.md "
+              "(R1-R3), then add --confirm-follower-at-start-pose", file=sys.stderr)
         return 2
-    if a.replay and not a.dry_run and not local:
-        print("[sender] REFUSED: a recording may only drive localhost or a dry run", file=sys.stderr)
+    if a.replay and real_ports:
+        print("[sender] REFUSED: a recording may not drive the real ports (dry run or --port-offset only)",
+              file=sys.stderr)
         return 2
     pose_set = a.pose_set or current_pose_set(a.pose_sets_dir)
     sides = ["left", "right"] if a.arms == "both" else [a.arms]
@@ -187,14 +247,19 @@ def main(argv=None) -> int:
         start = load_start_pose(s, pose_set, a.pose_sets_dir)
         chans.append(ArmChannel(s, start, cfg, link, a.urdf, a.link_timeout_s, a.tcp_offset_m))
         ch = chans[-1]
-        assert PORTS[s] == ch.val.port
-        print(f"[sender] {s}: port {PORTS[s] + a.port_offset}, limits (deg, margin incl.) "
+        print(f"[sender] {s}: tcp://{a.host}:{PORTS[s] + a.port_offset} (echo {ECHO_PORTS[s] + a.port_offset}), "
+              f"start pose {pose_file(s, pose_set, a.pose_sets_dir)} sha256 {pose_file_sha(s, pose_set, a.pose_sets_dir)} "
+              "(compare with the follower PC: sha256sum of its CURRENT set's file), limits (deg, margin incl.) "
               f"{ {k: tuple(round(x, 1) for x in v) for k, v in ch.val.limits.items()} }", flush=True)
     src = ReplaySource(a.replay) if a.replay else SdkSource()
-    tr = FreshnessTracker()
+    # 0.25 s: live Wi-Fi had 25 gaps > 100 ms per minute (log-007); 0.25 s = the receiver hold threshold
+    tr = FreshnessTracker(stale_s=0.25)
     log_path = a.log or time.strftime("runs/sender-%Y%m%d-%H%M%S.jsonl")
     os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
     log = open(log_path, "w")
+    session = uuid.uuid4().hex[:8]
+    log.write(json.dumps({"session": session, "pose_set": pose_set, "args": vars(a), "config": vars(cfg),
+                          "pose_sha": {s: pose_file_sha(s, pose_set, a.pose_sets_dir) for s in sides}}) + "\n")
     print(f"[sender] pose_set={pose_set} arms={sides} host={a.host} hz={a.hz} scale={a.scale} "
           f"dry_run={a.dry_run} log={log_path}\n[sender] squeeze GRIP to follow, release to hold; "
           f"TRIGGER closes the gripper. Ctrl-C stops (receiver holds the last pose).", flush=True)
@@ -207,7 +272,9 @@ def main(argv=None) -> int:
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
             for ch in chans:
                 act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}", t0)
-                rec["arms"][ch.side] = {"state": ch.arm.state, "action": act, "seq": ch.seq, "event": ev}
+                rec["arms"][ch.side] = {"state": ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
+                                        "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
+                                        "follower": ch.link.follower if ch.link else None}
                 if ev:
                     print(f"[{ch.side}] {ev}", flush=True)
             log.write(json.dumps(rec) + "\n")
@@ -215,7 +282,14 @@ def main(argv=None) -> int:
                 last_print = t0
                 for ch in chans:
                     st = " ".join(f"{v:+6.1f}" for v in ch.last_sent.values())
-                    print(f"[{ch.side:5s}] {ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}", flush=True)
+                    # TCP motion since engage, robot frame (x fwd, y left, z up): the axis-sign check
+                    tcp = ch.arm.kin.fk(ch.arm.q).translation
+                    d = (tcp - ch.arm.anchor_tcp) * 100 if ch.arm.anchor_tcp is not None else tcp * 0
+                    print(f"[{ch.side:5s}] {ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
+                          f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm", flush=True)
+            if chans and all(ch.link_down for ch in chans):
+                print("[sender] every arm's link is down: exiting", flush=True)
+                break
             if a.replay and src.exhausted:
                 break
             time.sleep(max(period - (time.monotonic() - t0), 0.0))
@@ -226,7 +300,8 @@ def main(argv=None) -> int:
         log.close()
         for ch in chans:
             if ch.link:
-                print(f"[{ch.side}] sent={ch.link.sent} dropped={ch.link.dropped}")
+                print(f"[{ch.side}] session={session} sent={ch.link.sent} dropped={ch.link.dropped} "
+                      f"bad_echo={ch.link.bad_echo}")
                 ch.link.close()
     return 0
 
