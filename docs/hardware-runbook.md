@@ -21,7 +21,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count |
 | 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done |
 | 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted |
-| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | pending |
+| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | PASS 2026-10-31 (log-016) |
 
 ## Roles
 - **Spotter**: beside the arm, hand on the emergency stop, status terminal turned toward them.
