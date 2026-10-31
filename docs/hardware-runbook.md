@@ -1,6 +1,6 @@
 # Gate 5 — first supervised real-arm session with the PICO (runbook + spotter card)
 
-Status: **not yet allowed.** Every row of the go/no-go table must say PASS, signed by the named
+Status: **first supervised session done 2026-10-31 (log-010)**; repeat the go/no-go for every new day or setup. Every row of the go/no-go table must say PASS, signed by the named
 owner, before the first squeeze. Source rules: `notion/OpenArm 安全プロトコル…md` (archived copy),
 Kento's request §8-9. If anything surprises anyone: **stop** (spotter card below).
 
