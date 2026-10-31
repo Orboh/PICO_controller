@@ -88,6 +88,8 @@ class TeleopConfig:
     rot_gap_fault_s: float = 0.5       # hand-to-gripper rotation gap > rot_fault_deg for this long -> FAULT
     max_session_drift_deg: float = 90.0  # no joint further than this from the session start (log-022:
                                          # 60 stopped normal reaches; the leader arm used 107 deg on j1)
+    j1_session_drift_deg: float | None = 120.0  # joint_1 only (log-024): the task swings j1 ~100-107 deg in
+                                         # leader demos; None = same as max_session_drift_deg
     joint_margin_deg: float = 2.0
 
 
@@ -178,6 +180,16 @@ class ArmTeleop:
     def _out(self, event=None, err=0.0, sigma=math.nan) -> StepOut:
         return StepOut(self.action(), self.state, event, err, sigma)
 
+    def _worst_drift(self, q: np.ndarray) -> tuple[int, float, float]:
+        """Joint closest to (or furthest past) its session drift limit: (joint number, drift deg, limit deg)."""
+        cfg = self.cfg
+        drift = np.abs(np.rad2deg(q - self.q_session))
+        lim = np.full(drift.shape, cfg.max_session_drift_deg)
+        if cfg.j1_session_drift_deg is not None:
+            lim[0] = cfg.j1_session_drift_deg
+        i = int(np.argmax(drift - lim))
+        return i + 1, float(drift[i]), float(lim[i])
+
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
         self.q_ik = self.q.copy()
@@ -262,10 +274,10 @@ class ArmTeleop:
             if self.locked:
                 refuse = self.locked
             else:
-                drift = float(np.max(np.abs(np.rad2deg(self.q - self.q_session))))
-                if drift > cfg.max_session_drift_deg:
-                    refuse = (f"the arm is {drift:.0f} deg from the session start pose "
-                              f"(> {cfg.max_session_drift_deg:.0f}): end with esc and restart (R2)")
+                j, drift, lim = self._worst_drift(self.q)
+                if drift > lim:
+                    refuse = (f"the arm is {drift:.0f} deg from the session start pose on joint_{j} "
+                              f"(> {lim:.0f}): end with esc and restart (R2)")
             if refuse:
                 self.reset_squeeze()
                 first = not self.refused_this_squeeze
@@ -382,11 +394,10 @@ class ArmTeleop:
                 j = int(np.argmax(near)) + 1
                 return self._fault(f"joint_{j} would come within {room_new[j - 1]:.1f} deg of its limit "
                                    f"(< {cfg.limit_guard_deg:.0f}): move back")
-            drift = np.abs(np.rad2deg(res.q - self.q_session))
-            if drift.max() > cfg.max_session_drift_deg:
-                j = int(drift.argmax()) + 1
-                return self._fault(f"joint_{j} would be {drift.max():.0f} deg from the session start pose "
-                                   f"(> {cfg.max_session_drift_deg:.0f}): bring the hand back")
+            j, drift, lim = self._worst_drift(res.q)
+            if drift > lim:
+                return self._fault(f"joint_{j} would be {drift:.0f} deg from the session start pose "
+                                   f"(> {lim:.0f}): bring the hand back")
             posture = np.abs(np.rad2deg(res.q - self.anchor_q))
             if posture.max() > cfg.max_posture_change_deg:
                 j = int(posture.argmax()) + 1

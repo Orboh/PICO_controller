@@ -212,13 +212,29 @@ def test_locked_arm_never_engages_and_reports_once_per_squeeze():
 
 
 def test_session_drift_limit_refuses_and_faults():
-    arm = _arm(orientation=False, max_session_drift_deg=20.0)
+    arm = _arm(orientation=False, max_session_drift_deg=20.0, j1_session_drift_deg=None)
     events = [arm.step(ADAPT(_c(delta=(0.0, 0.003 * i, 0.0)), True)).event for i in range(1, 300)]
     assert any(e and "session start pose" in e for e in events)
     arm.step(ADAPT(_c(grip=0.0), True))
     out = arm.step(ADAPT(_c(), True))
     if arm.state != ENGAGED:   # far from the start: engage refused
         assert "session start pose" in (out.event or "")
+
+
+def test_joint1_has_its_own_drift_limit():
+    """log-024: joint_1 may drift 120 deg (the task needs ~107), the other joints keep 90."""
+    arm = _arm(orientation=False)
+    d = np.zeros(7)
+    d[0] = np.deg2rad(100.0)
+    j, drift, lim = arm._worst_drift(arm.q_session + d)
+    assert j == 1 and lim == 120.0 and drift <= lim   # 100 deg on j1: allowed
+    d[1] = np.deg2rad(95.0)
+    j, drift, lim = arm._worst_drift(arm.q_session + d)
+    assert j == 2 and lim == 90.0 and drift > lim     # 95 deg on j2: over its limit
+    d[:] = 0
+    d[0] = np.deg2rad(125.0)
+    j, drift, lim = arm._worst_drift(arm.q_session + d)
+    assert j == 1 and drift > lim                     # 125 deg on j1: over 120
 
 
 def test_orientation_follows_position_when_rotation_unreachable():
