@@ -53,7 +53,9 @@ class TeleopConfig:
     ik_max_iter: int = 60
     min_sigma: float = 0.03            # smallest singular value of the 3x7 position Jacobian
     max_ik_jump_deg: float = 5.0       # IK answer vs previous IK answer per cycle (TCP moves <= 5 mm)
-    max_posture_change_deg: float = 45.0  # any joint this far from its value at engage -> FAULT
+    max_posture_change_deg: float = 60.0  # any joint this far from its value at engage -> FAULT
+                                          # (45 -> 60 on 2026-10-31, Suraj: 45 tripped in normal large
+                                          # moves in the first arm session, log-010)
     limit_band_deg: float = 15.0       # joints closer than this to a limit are pushed away (null space)
     null_gain: float = 0.0             # OFF (log-004: it moved the arm at engage); rad per IK step
     max_lag_deg: float = 10.0          # sent joints may trail the IK answer by this much; beyond it

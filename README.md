@@ -58,7 +58,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose | wait for `link back`, then release and squeeze. **If the follower may be restarting: Ctrl-C the sender FIRST** (its held pose would become the restarted follower's first target), then follow R2. If the follower was restarted: restart the sender too (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
-| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 45°) | release, squeeze again: it re-anchors and allows another 45°; if it repeats, stop |
+| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 60°) | release, squeeze again: it re-anchors and allows another 60°; if it repeats, stop |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
 
 The sender prints the state of each arm once per second and every event as it happens.
