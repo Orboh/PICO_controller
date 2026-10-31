@@ -101,11 +101,14 @@ class FreshnessTracker:
 
     Stream level: the device timestamp must advance (backwards = 'ts_backwards', a reconnect) and
     must not be stuck longer than `stale_s`. Side level: a valid pose that stays bit-identical for
-    `frozen_updates` device updates is 'frozen' (that side is no longer being refreshed).
+    `frozen_s` while device updates keep arriving is 'frozen' (that side is no longer refreshed).
     """
 
-    def __init__(self, stale_s: float = 0.1, frozen_updates: int = 10):
-        self.stale_s, self.frozen_updates = stale_s, frozen_updates
+    def __init__(self, stale_s: float = 0.1, frozen_s: float = 0.25):
+        # frozen_s: time-based so an app that repeats poses between tracking updates does not trip
+        # it; 0.25 s = the receiver's hold threshold. Real repeat behaviour: confirm in gate 1 live.
+        self.stale_s, self.frozen_s = stale_s, frozen_s
+        self.same_since: dict[str, float | None] = {s: None for s in SIDES}
         self.last_ts: int | None = None
         self.last_change_t: float | None = None
         self.same: dict[str, int] = {s: 0 for s in SIDES}
@@ -121,6 +124,7 @@ class FreshnessTracker:
             self.stream = "ts_backwards"
             self.last_ts, self.last_change_t = fr.t_device_ns, fr.t_host
             self.same = {s: 0 for s in SIDES}
+            self.same_since = {s: None for s in SIDES}
             new = True
         elif fr.t_device_ns != self.last_ts:
             new = True
@@ -132,11 +136,16 @@ class FreshnessTracker:
             pose = fr.controller(s).pose
             ps = pose_status(pose)
             if new:
-                self.same[s] = self.same[s] + 1 if pose == self.last_pose.get(s) else 0
+                if pose == self.last_pose.get(s):
+                    self.same[s] += 1
+                    if self.same_since[s] is None:
+                        self.same_since[s] = fr.t_host
+                else:
+                    self.same[s], self.same_since[s] = 0, None
                 self.last_pose[s] = pose
             if ps != "ok":
                 self.side_state[s] = ps
-            elif self.same[s] >= self.frozen_updates:
+            elif self.same_since[s] is not None and fr.t_host - self.same_since[s] >= self.frozen_s:
                 self.side_state[s] = "frozen"
             else:
                 self.side_state[s] = "ok"

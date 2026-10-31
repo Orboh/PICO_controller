@@ -18,6 +18,11 @@ import numpy as np
 import pinocchio as pin
 
 DEFAULT_URDF = os.path.expanduser("~/projects/openarm-orboh/urdf/openarm_v10_bimanual.urdf")
+# The URDF's openarm_<side>_hand_tcp sits ON link7 with a zero offset (URDF lines 474-478 / 547-551):
+# it is the wrist point, and joints 5-7 cannot move it (Elephant review, log-005). The gripper points
+# along link7 +z and the fingers are mounted 0.1025 m out (finger_joint origin). We add our own TCP
+# frame there. 0.1025 m is the finger ROOT, a lower bound: measure the real grasp point and pass it.
+DEFAULT_TCP_OFFSET_M = 0.1025
 LEROBOT_JOINTS = [f"joint_{i}" for i in range(1, 8)]
 
 
@@ -39,7 +44,8 @@ class ArmKinematics:
     """FK / IK for one arm. `limits_deg` (lerobot joint_k -> (lo, hi)) further restricts the URDF."""
 
     def __init__(self, side: str, urdf_path: str = DEFAULT_URDF,
-                 limits_deg: dict[str, tuple[float, float]] | None = None, margin_deg: float = 0.0):
+                 limits_deg: dict[str, tuple[float, float]] | None = None, margin_deg: float = 0.0,
+                 tcp_offset_m: float = DEFAULT_TCP_OFFSET_M):
         if side not in ("left", "right"):
             raise ValueError(f"side must be left/right, got {side!r}")
         self.side = side
@@ -52,10 +58,13 @@ class ArmKinematics:
         self.data = self.model.createData()
         if [self.model.names[j] for j in range(1, self.model.njoints)] != joints:
             raise RuntimeError(f"unexpected joint order in reduced model: {list(self.model.names)}")
-        tcp = f"openarm_{side}_hand_tcp"
-        if not self.model.existFrame(tcp):
-            raise RuntimeError(f"TCP frame {tcp} missing in {urdf_path}")
-        self.tcp_fid = self.model.getFrameId(tcp)
+        link7 = self.model.frames[self.model.getFrameId(f"openarm_{side}_link7")]
+        self.tcp_offset_m = float(tcp_offset_m)
+        placement = link7.placement * pin.SE3(np.eye(3), np.array([0.0, 0.0, self.tcp_offset_m]))
+        self.tcp_fid = self.model.addFrame(pin.Frame(f"pico_{side}_tcp", link7.parentJoint,
+                                                     self.model.getFrameId(f"openarm_{side}_link7"),
+                                                     placement, pin.FrameType.OP_FRAME))
+        self.data = self.model.createData()
         lo = np.array(self.model.lowerPositionLimit, dtype=float)
         hi = np.array(self.model.upperPositionLimit, dtype=float)
         if limits_deg:

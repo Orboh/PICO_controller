@@ -12,3 +12,5 @@ Rules for this folder:
 | [log-002.md](log-002.md) | Read-only inspection: commits, the receiver/follower contract, the SDK's stale-value behaviour, NaN-to-upper-limit and no-follower-feedback findings, and why the code lives here. |
 | [log-003.md](log-003.md) | Gate 1: guided input-only diagnostic (`xr_input.py`, `diag_input.py`), 12 offline tests, Elephant/Goldfish findings and fixes; live PASS pending the headset. |
 | [log-004.md](log-004.md) | Gate 2 offline: frames, per-side IK, packet validator, HOLD/ENGAGED/FAULT clutch, gripper soft takeover; 43 tests, trajectory plots; bugs found in the plots (false jump, IK staircase) fixed; right-arm posture-swing finding. |
+| [log-005.md](log-005.md) | Milestone-2 Elephant/Goldfish findings and fixes: real fingertip TCP (URDF tcp is the wrist), pose set in force, valid-only releases, analog checks, posture fault, device-independent core, README controls. |
+| [log-006.md](log-006.md) | Gate 3: sender vs the real lerobot receiver on localhost (56 tests), NaN pass-through confirmed, record 'a' key; the follower-pose anchor gap and the proposed receiver patch; gate 4 plan. |

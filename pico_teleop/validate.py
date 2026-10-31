@@ -56,9 +56,14 @@ class ActionValidator:
         self.limits = {f"{k}.pos": (lo, hi) if k == "gripper" else (lo + m, hi - m)
                        for k, (lo, hi) in FOLLOWER_LIMITS_DEG[side].items()}
 
-    def check(self, action: dict, prev: dict | None, arm: str | None = None) -> Verdict:
+    @property
+    def port(self) -> int:
+        """The only command port this arm may send to."""
+        return PORTS[self.side]
+
+    def check(self, action: dict, prev: dict | None, arm: str) -> Verdict:
         r: list[str] = []
-        if arm is not None and arm != self.side:
+        if arm != self.side:
             r.append(f"packet arm {arm!r} != validator side {self.side!r}")
         keys = set(action)
         missing = [k for k in ACTION_KEYS if k not in keys]

@@ -11,13 +11,48 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 
 ## Status
 
-| Gate | State |
-|---|---|
-| 1 input-only diagnostic | tool + 12 offline tests done; **live run pending (needs the headset)** |
-| 2 offline mapping / IK | in progress |
-| 3 fake receiver | not started |
-| 4 recording dry run | not started |
-| 5 hardware | **blocked**: safety protocol prerequisites (below) |
+| Gate | State | Still needed before hardware |
+|---|---|---|
+| 1 input-only diagnostic | tool + offline tests done | **live run with the headset**; record what the SDK does on tracking loss |
+| 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | live check of axis signs; measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
+| 3 fake receiver | done offline (real receiver class, localhost) | — |
+| 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
+| 5 hardware | **blocked** | follower-pose feedback for the anchor (log-006); safety protocol prerequisites (below); right-arm zero/sign check |
+
+Nothing in this repository has moved an arm.
+
+## Controls (sender, gate 3 onward)
+
+Left controller drives the left arm, right controller the right arm. Stand **behind the robot,
+facing the same way it faces**, then recenter the headset (forward for you = forward for the arm).
+
+| Input | Effect | When |
+|---|---|---|
+| **Grip, squeeze firmly (> 0.6)** | ENGAGE: the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. | only from HOLD, and only after the grip was seen open once since start (grip already held at start = nothing happens) |
+| **Grip, open fully (< 0.4)** | HOLD: the arm stops at the last sent target and stays there. Your hand can move freely. | ENGAGED |
+| Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
+| **Trigger** | gripper: released = open (-60°), fully pulled = closed (0°). **Soft takeover:** after each engage the gripper does not move until the trigger "meets" its current opening (within 3°): e.g. after start the gripper is closed, so pull the trigger fully first, then let go to open. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
+| A/B/X/Y, menu, sticks | nothing | — |
+| **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). | always |
+
+**There is no stop button on the controllers.** To stop the arm moving: open the grip. To stop
+everything: the spotter presses the emergency stop / switches off the arm PSU (safety protocol §1).
+
+**FAULT:** the arm freezes and ignores your hand. You cannot see this inside the headset (no
+vibration or sound yet), so **the spotter watches the sender terminal and calls out "FAULT"**.
+To recover: open the grip fully, move your hand back toward the middle, squeeze again.
+
+| Message in the terminal | Plain meaning | What to do |
+|---|---|---|
+| `input stale` / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
+| `link lost: no echo from the receiver` | the arm PC stopped answering | spotter checks the arm PC; do not re-squeeze until it is back |
+| `target unreachable` | the hand asked for a point the arm cannot reach | release, bring the hand back toward you, squeeze |
+| `near singular` | the arm is almost straight | same as above |
+| `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
+| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 45°) | release, squeeze again: it re-anchors and allows another 45° |
+| `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
+
+The sender prints the state of each arm once per second and every event as it happens.
 
 ## Setup (once per PC)
 

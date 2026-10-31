@@ -1,0 +1,28 @@
+# PROPOSAL (not applied): let openarm_leader_remote send the follower's measured joints back to the
+# operator side on the existing echo channel. Backward compatible: leader_agent ignores unknown keys.
+# Why: the PICO sender cannot see the follower today (log-002 finding 3, log-006). With this it can
+# refuse to engage when the follower is not at the held target, and stop on a tracking error > 8 deg
+# (OpenArm safety protocol §1 L0). Owner to decide: Kento (lerobot fork, feat/bi-openarm-soft-move-to).
+--- a/src/lerobot/teleoperators/openarm_leader_remote/openarm_leader_remote.py
++++ b/src/lerobot/teleoperators/openarm_leader_remote/openarm_leader_remote.py
+@@ class OpenArmLeaderRemote(Teleoperator):
++        self._follower_obs: dict[str, float] = {}
+@@     def _echo(self, pkt: dict[str, Any]) -> None:
+-                json.dumps({"seq": pkt.get("seq"), "t_mono": pkt.get("t_mono")}),
++                json.dumps({"seq": pkt.get("seq"), "t_mono": pkt.get("t_mono"),
++                            "follower": self._follower_obs or None}),
+@@     def send_feedback(self, feedback: dict[str, Any]) -> None:
+-        raise NotImplementedError("Feedback is not implemented for OpenArm leader remote.")
++        # Called by the record / teleoperate loop with the robot observation.
++        self._follower_obs = {k: float(v) for k, v in feedback.items()
++                              if k.endswith(".pos") and isinstance(v, (int, float))}
+--- a/src/lerobot/scripts/lerobot_record.py
++++ b/src/lerobot/scripts/lerobot_record.py
+-            if robot.name == "unitree_g1" or teleop.name == "bi_openarm_leader":
++            if robot.name == "unitree_g1" or teleop.name in ("bi_openarm_leader", "openarm_leader_remote"):
+                 teleop.send_feedback(obs)
+--- a/src/lerobot/scripts/lerobot_teleoperate.py
++++ b/src/lerobot/scripts/lerobot_teleoperate.py
+-        if robot.name == "unitree_g1":
++        if robot.name == "unitree_g1" or teleop.name == "openarm_leader_remote":
+             teleop.send_feedback(obs)
