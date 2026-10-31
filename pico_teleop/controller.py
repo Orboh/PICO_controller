@@ -43,7 +43,8 @@ class TeleopConfig:
     max_target_lag_m: float = 0.15     # desired TCP this far ahead of the rate-limited target -> FAULT
     max_hand_step_m: float = 0.10      # hand moved this far in ONE device update -> FAULT, whatever the
                                        # dt (a catch-up after a short gap can stay under the speed limit)
-    gripper_open_deg: float = -60.0    # trigger released (lerobot gripper range is -65..0, 0 = closed)
+    gripper_open_deg: float = -58.0    # trigger released. Measured 2026-10-31: left gripper opened by
+                                       # hand to its stop reads -60.1 deg (logical, offset 0) -> 2 deg short
     gripper_closed_deg: float = 0.0    # trigger fully pulled
     max_tcp_speed_mps: float = 0.25    # TCP target rate limit
     max_joint_speed_dps: float = 45.0  # joint rate limit applied before validation (validator: 60)

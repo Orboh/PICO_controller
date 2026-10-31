@@ -194,9 +194,9 @@ def test_gripper_gentle_sync():
     assert all(b - a <= 1e-9 for a, b in zip(g, g[1:]))  # only opening, never jumps
     for _ in range(60):
         out = arm.step(_h(_c(trig=0.0)))
-    assert out.action["gripper.pos"] == pytest.approx(-60.0) and arm.grip_synced
+    assert out.action["gripper.pos"] == pytest.approx(-58.0) and arm.grip_synced
     seq = [arm.step(_h(_c(trig=1.0))).action["gripper.pos"] for _ in range(5)]
-    assert seq[0] == pytest.approx(-57.6)  # synced: 120 deg/s = 2.4 deg per cycle
+    assert seq[0] == pytest.approx(-55.6)  # synced: 120 deg/s = 2.4 deg per cycle
 
 
 def test_gripper_resync_after_each_engage():
@@ -207,7 +207,7 @@ def test_gripper_resync_after_each_engage():
     arm.step(_h(_c(trig=1.0)))             # re-engage with the trigger fully pulled
     assert not arm.grip_synced
     out = arm.step(_h(_c(trig=1.0)))
-    assert out.action["gripper.pos"] == pytest.approx(-59.4, abs=0.01)  # one slow 0.6 deg step (30 deg/s)
+    assert out.action["gripper.pos"] == pytest.approx(-57.4, abs=0.01)  # one slow 0.6 deg step (30 deg/s)
 
 
 @pytest.mark.parametrize("side", ["left", "right"])

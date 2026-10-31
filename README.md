@@ -14,7 +14,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | Gate | State | Still needed before hardware |
 |---|---|---|
 | 1 input-only diagnostic | **PASS live** 2026-10-31, all 5 phases (log-007, `evidence/gate1`) | — (finding: a hidden controller is not detectable) |
-| 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
+| 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | measure the real grasp point (`--tcp-offset-m`); view a run in Meshcat |
 | 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
@@ -32,7 +32,7 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 | **Grip, squeeze and keep holding** | after **0.3 s** of holding (the terminal prints `ENGAGED`): ENGAGE, the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. A short accidental squeeze (e.g. while pulling the trigger) does nothing. | only from HOLD, only with the link up (not waiting/LINK DOWN), and only after the grip was seen open once since start (grip already held at start = nothing happens) |
 | **Grip, open fully (< 0.4)** | HOLD: no new targets are sent; the arm finishes the last small step (≤ 0.9° per joint, one 20 ms cycle) and stays there. Settling on the real arm: to be measured in the first 2 cm test. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
-| **Trigger** | gripper: released = open (-60°), fully pulled = closed (0°). **Gentle sync:** after each engage the gripper moves **slowly (30°/s)** toward where the trigger says until they match, then follows at normal speed. Example: at start the gripper is closed and the trigger released, so after engaging it opens slowly over ~2 s; release the grip to stop it. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
+| **Trigger** | gripper: released = open (-58°, 2° short of the measured stop at -60.1°), fully pulled = closed (0°). **Gentle sync:** after each engage the gripper moves **slowly (30°/s)** toward where the trigger says until they match, then follows at normal speed. Example: at start the gripper is closed and the trigger released, so after engaging it opens slowly over ~2 s; release the grip to stop it. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
 | A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
 | **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). Before starting the sender again: restart the follower (runbook R2). | always |
 
