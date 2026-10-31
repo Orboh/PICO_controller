@@ -80,5 +80,21 @@ If anything surprises anyone: **stop** (spotter card below).
 | wearer squeezes before "ready" | call "release" | repeat R1 |
 | (with `--orientation`) the wrist turns while the hand's position is still | expected only if the wearer turned the hand (it may finish turning ~0.5 s later, 90°/s limit); otherwise call "release" | — |
 | (with `--orientation`) fingers or the flange swing toward the table or the arm | call "release" | if it does not stop: emergency stop |
+| `joint_N would be … deg from the session start pose` | call "FAULT" (arm frozen). joint_1 may swing up to **120°** from the start (other joints 90°): keep the area to the robot's left/front clear | wearer brings the hand back; a second one locks → stop the block |
 | `LOCKED` in the terminal | the sender refuses to engage until restarted (same FAULT twice in 30 s) | stop: release, `esc`, restart both (R2); log why it repeated |
 | anything unexpected | stop the session | log it before resuming |
+
+## Pilot recording with the PICO (left arm, log-024)
+Roles: operator (headset) **and a separate spotter at the e-stop**; keyboard person may be the spotter.
+Before: today's go/no-go column filled; the arm's sweep area clear for a joint_1 swing of up to 120°.
+1. Input check: `bash ~/projects/PICO-controller/scripts/check_input.sh` → expect `rate ~50-80 Hz | L ok`.
+2. Terminal A: `bash ~/projects/PICO-controller/scripts/gate4_sender.sh pilot-pico-<n>` → expect the
+   start-pose line with sha `2ec31fb82bf0`, then `HOLD`.
+3. Spotter: **"arm may move"** → left arm power supply (PSU) on.
+4. Terminal B: `bash ~/projects/PICO-controller/scripts/pilot_record.sh pico` → **the arm moves by itself**
+   to the start pose; spotter compares with the printed start pose, then says "ready".
+5. Episodes: → starts, `a` ends and resets (**the arm moves by itself**), 5 episodes, `esc` at the end
+   after the grip is released (R4). Note "grasp OK / placed OK" per episode.
+6. **Stop rules:** the first `LOCKED` → stop the block (`esc`, PSU off, Ctrl-C terminal A), log why.
+   Anything unexpected → e-stop. Never continue without the spotter's "ready".
+7. After: PSU off; log-NNN with per-episode result, FAULTs, smallest margin to the joint_1 limit.

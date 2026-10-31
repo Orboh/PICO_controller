@@ -19,6 +19,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 4 recording dry run | **PASS** 2026-10-31: lerobot-record with the PICO, chest + left wrist, follower tracks the actions (log-020) | a leader-arm recording with the same command for the side-by-side schema check |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
 | 2b wrist rotation | offline + dry run PASS (log-015/016); **real arm: small single-axis turns ≤ 15° followed 1:1, 0 FAULTs** (session 5, log-019; spotter-rule deviation) | repeat with a separate spotter; larger turns; right arm |
+| pilot (leader vs PICO) | leader × 5 recorded (log-021); PICO locked twice after 1 good episode (log-022/023); joint_1 drift limit 120° (log-024) **offline only** | 5 PICO episodes on the robot without LOCKED (runbook "Pilot recording"); compare |
 | 5 hardware | **PASS** 2026-10-31, left arm: directions (session 2) and gripper by trigger (session 3), operator Kota-san, spotter Suraj (log-010/011/014) | right arm; wrist rotation; gripper force feedback; follower-feedback patch (Kento) |
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
@@ -27,6 +28,8 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 - [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set
   (and the PICO) at −63.4° (~89° apart, log-021). Check the leader↔follower joint_7 calibration; redo pilot block 1.
 - [ ] Block-1 outcomes per episode (grasp / place) from the operator.
+- [ ] Ask Kento also about the joint_1 start: leader episodes start at +51…+54°, the PICO (pose set) at +64.4°.
+- [ ] Right arm: the 120° joint_1 drift limit applies to it too; review after its zero/sign check.
 
 ## Controls (sender, gate 3 onward)
 

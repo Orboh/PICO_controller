@@ -237,6 +237,17 @@ def test_joint1_has_its_own_drift_limit():
     assert j == 1 and drift > lim                     # 125 deg on j1: over 120
 
 
+def test_joint1_drift_limit_in_the_step_path():
+    """Goldfish #6: the real per-cycle check. Pretend the session started 100 / 125 deg away on joint_1."""
+    for offset, should_fault in ((100.0, False), (125.0, True)):
+        arm = _arm(orientation=False)
+        arm.q_session = arm.q_session.copy()
+        arm.q_session[0] -= np.deg2rad(offset)
+        events = [arm.step(ADAPT(_c(delta=(0.0, 0.0, 0.0005 * i)), True)).event for i in range(1, 20)]
+        faulted = any(e and "joint_1 would be" in e and "session start" in e for e in events)
+        assert faulted == should_fault, (offset, events)
+
+
 def test_orientation_follows_position_when_rotation_unreachable():
     """Softer orientation: a slightly unreachable rotation does not FAULT; position still follows."""
     arm = _arm()
