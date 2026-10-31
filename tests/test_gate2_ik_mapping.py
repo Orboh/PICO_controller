@@ -291,3 +291,14 @@ def test_grip_hold_uses_device_time():
     for _ in range(20):  # 20 sender ticks, but the device clock does not advance
         assert arm.step(ADAPT(_c(), True, "", 1.011)).state == HOLD
     assert arm.step(ADAPT(_c(), True, "", 1.32)).state == ENGAGED
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_limit_avoidance_does_not_move_a_still_arm(side):
+    """Avoidance is ON (8 deg zone, log-022). The start poses sit outside the zone: engaging and holding the
+    hand still must not move the arm (the 15 deg zone did, log-004)."""
+    arm = _engaged(side)
+    a0 = arm.action()
+    for _ in range(100):
+        out = arm.step(_h(_c((0, 0, 0))))
+    assert max(abs(out.action[k] - a0[k]) for k in a0) < 0.05

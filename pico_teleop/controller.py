@@ -61,8 +61,9 @@ class TeleopConfig:
     max_posture_change_deg: float = 60.0  # any joint this far from its value at engage -> FAULT
                                           # (45 -> 60 on 2026-10-31, Suraj: 45 tripped twice in normal
                                           # large moves in arm session 2, log-010/011)
-    limit_band_deg: float = 15.0       # joints closer than this to a limit are pushed away (null space)
-    null_gain: float = 0.0             # OFF (log-004: it moved the arm at engage); rad per IK step
+    limit_band_deg: float = 8.0        # joints closer than this to a limit are pushed away (null space);
+                                       # 8 deg keeps the start poses outside the zone (no motion at engage)
+    null_gain: float = 0.05            # ON since log-022 (PICO pilot: IK pushed joint_2 into its limit)
     max_lag_deg: float = 10.0          # sent joints may trail the IK answer by this much; beyond it
                                        # the TCP target waits for the joints to catch up
     operator_yaw_deg: float = 0.0      # operator facing direction relative to robot +x
@@ -85,7 +86,8 @@ class TeleopConfig:
     limit_guard_deg: float = 3.0       # an IK answer this close to a joint limit (margin incl.) that moves
                                        # TOWARD the limit -> FAULT (the 60 deg drift alone does not keep j1 off)
     rot_gap_fault_s: float = 0.5       # hand-to-gripper rotation gap > rot_fault_deg for this long -> FAULT
-    max_session_drift_deg: float = 60.0  # no joint may get further than this from the session's start pose
+    max_session_drift_deg: float = 90.0  # no joint further than this from the session start (log-022:
+                                         # 60 stopped normal reaches; the leader arm used 107 deg on j1)
     joint_margin_deg: float = 2.0
 
 
