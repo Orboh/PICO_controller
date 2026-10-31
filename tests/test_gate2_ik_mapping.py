@@ -185,14 +185,29 @@ def test_posture_change_faults():
     assert any(e and "posture change" in e for e in events)
 
 
-def test_gripper_soft_takeover():
+def test_gripper_gentle_sync():
+    """Engaging with the trigger released: the closed gripper opens SLOWLY (30 deg/s) until it matches,
+    then follows the trigger at full speed (120 deg/s)."""
     arm = _engaged("right")
-    for _ in range(20):  # trigger released (= open) while the gripper is closed: no motion
-        assert arm.step(_h(_c(trig=0.0))).action["gripper.pos"] == 0.0
-    arm.step(_h(_c(trig=1.0)))
+    g = [arm.step(_h(_c(trig=0.0))).action["gripper.pos"] for _ in range(50)]  # 1 s at 50 Hz
+    assert g[0] == pytest.approx(-0.6) and g[-1] == pytest.approx(-30.0, abs=0.01)  # 30 deg/s
+    assert all(b - a <= 1e-9 for a, b in zip(g, g[1:]))  # only opening, never jumps
     for _ in range(60):
-        out = arm.step(_h(_c(trig=0.5)))
-    assert out.action["gripper.pos"] == pytest.approx(-30.0, abs=0.5)
+        out = arm.step(_h(_c(trig=0.0)))
+    assert out.action["gripper.pos"] == pytest.approx(-60.0) and arm.grip_synced
+    seq = [arm.step(_h(_c(trig=1.0))).action["gripper.pos"] for _ in range(5)]
+    assert seq[0] == pytest.approx(-57.6)  # synced: 120 deg/s = 2.4 deg per cycle
+
+
+def test_gripper_resync_after_each_engage():
+    arm = _engaged("right")
+    for _ in range(150):
+        arm.step(_h(_c(trig=0.0)))
+    arm.step(_h(_c(trig=0.0, grip=0.0)))   # release
+    arm.step(_h(_c(trig=1.0)))             # re-engage with the trigger fully pulled
+    assert not arm.grip_synced
+    out = arm.step(_h(_c(trig=1.0)))
+    assert out.action["gripper.pos"] == pytest.approx(-59.4, abs=0.01)  # one slow 0.6 deg step (30 deg/s)
 
 
 @pytest.mark.parametrize("side", ["left", "right"])

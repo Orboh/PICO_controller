@@ -19,3 +19,4 @@ Rules for this folder:
 | [log-009.md](log-009.md) | Online gate 3 PASS: live PICO → sender → real port 5701 → real lerobot receiver in remote_probe (no robot): first packet = start pose, live engage/release, hold on stop; gripper takeover finding; RTT measurement limit. |
 | [log-010.md](log-010.md) | Gate 5: go/no-go signed; two supervised left-arm sessions (operators Suraj and Kota-san); directions confirmed on the real arm; all FAULTs behaved as designed; tuning findings (Wi-Fi, 45° posture limit, gripper takeover). |
 | [log-011.md](log-011.md) | Reviews of the arm sessions: deviations listed (not clean checks), periodic 15 s stalls + PC Wi-Fi power save, runbook rewrite (daily go/no-go, R1-R4, esc after release), posture limit 60°, gripper options. |
+| [log-012.md](log-012.md) | Gripper gentle sync (30°/s until the trigger matches, then 120°/s) replaces the soft takeover; options compared; 72 tests; −60° still to measure on the arm. |

@@ -48,6 +48,8 @@ class TeleopConfig:
     max_tcp_speed_mps: float = 0.25    # TCP target rate limit
     max_joint_speed_dps: float = 45.0  # joint rate limit applied before validation (validator: 60)
     max_gripper_speed_dps: float = 120.0
+    gripper_sync_dps: float = 30.0     # "gentle sync": speed toward the trigger until they match
+                                       # (log-012; was: no motion until a near-full trigger pull)
     ik_solve_tol_m: float = 1e-4       # IK iterates to this every cycle (smooth, no 5 mm staircase)
     ik_tol_m: float = 0.005            # accepted if the answer is within 5 mm, else "unreachable"
     ik_max_iter: int = 60
@@ -261,11 +263,12 @@ class ArmTeleop:
         self.q = self.kin.clamp(self.q + np.clip(self.q_ik - self.q, -qlim, qlim))
 
         g_des = cfg.gripper_open_deg + h.gripper * (cfg.gripper_closed_deg - cfg.gripper_open_deg)
-        # Soft takeover: the gripper stays put until the trigger's mapped value comes within 3 deg of
-        # the gripper's current angle (re-armed at every engage), then follows at <= 120 deg/s.
+        # Gentle sync: after each engage the gripper moves toward the trigger's mapped angle at only
+        # gripper_sync_dps (30 deg/s: a closed gripper with the trigger released opens over ~2 s,
+        # visible and stoppable by releasing the grip); once within 3 deg it follows at <= 120 deg/s.
         if not self.grip_synced and abs(g_des - self.gripper) <= 3.0:
             self.grip_synced = True
-        if self.grip_synced:
-            glim = cfg.max_gripper_speed_dps * self.dt
-            self.gripper += float(np.clip(g_des - self.gripper, -glim, glim))
+        speed = cfg.max_gripper_speed_dps if self.grip_synced else cfg.gripper_sync_dps
+        glim = speed * self.dt
+        self.gripper += float(np.clip(g_des - self.gripper, -glim, glim))
         return self._out(None, err, sigma)
