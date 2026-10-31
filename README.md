@@ -18,7 +18,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
-| 5 hardware | **first supervised session PASS** 2026-10-31: left arm, directions confirmed by the spotter, clean esc stop (log-010) | right arm; gripper by trigger; follower-feedback patch (Kento) |
+| 5 hardware | **first approved supervised test PASS** 2026-10-31 (session 2: operator Kota-san, spotter Suraj): left arm, directions confirmed, clean esc stop (log-010/011) | right arm; gripper by trigger on the arm; follower-feedback patch (Kento) |
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 

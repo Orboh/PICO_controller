@@ -1,6 +1,6 @@
 # Gate 5 — supervised real-arm sessions with the PICO (runbook + spotter card)
 
-Status: two supervised left-arm sessions on 2026-10-31 (log-010). What that covers and does not:
+Status: one approved supervised left-arm test on 2026-10-31 (session 2, log-010/011; session 1 not counted). What that covers and does not:
 **covered** left arm, position only, TCP offset 0.1025 (assumed), follower checkout
 `openarm-orboh` `feat/takeei-wood-l1` @ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19.
 **Not covered** right arm, both arms at once, the gripper by trigger (open angle −60° not
@@ -17,7 +17,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | 4 | PSU switches | which switch = which arm, labelled, reachable by the spotter | **daily** | spotter (name) | done |
 | 5 | Arm and side | left arm only until the right arm's zero/sign is checked | per plan | Suraj + Kento | left |
 | 6 | Start pose and checkout | sender prints the start-pose sha = `sha256sum` of the follower's file; follower checkout branch + commit as above (or a newer one Kento names) | **daily** | Suraj | PASS (sha 2ec31fb82bf0) |
-| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kento/Kota OK for R1-R4 **in writing** (Slack/Notion link here) | until the patch lands | Kento / Kota | sessions 1-2 ran on a **spoken** OK relayed by Suraj; written: Kota's Slack "@Suraj Paliwal 実験していいよ" 12:59 (after the sessions; general, no scope) https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 |
+| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count |
 | 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done |
 | 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted |
 
