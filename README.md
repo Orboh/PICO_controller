@@ -160,4 +160,4 @@ From `notion/OpenArm 安全プロトコル…md` (archived copy, 2026-10-30) and
 an Orboh member beside the arm (the PICO wearer cannot see it); emergency stop **confirmed to exist**
 (protocol TODO#1 is open) and within reach; the arm PSU switches located and labelled (power cycle is
 the only sure way to go limp); workspace clear (`connect()` moves the arm by itself for about 2.2 s);
-start pose verified; one arm, small and slow motions first. Not started; nothing here has moved an arm.
+start pose verified; one arm, small and slow motions first. First supervised left-arm sessions: 2026-10-31 (log-010, log-011); procedure: `docs/hardware-runbook.md`.
