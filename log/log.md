@@ -21,3 +21,4 @@ Rules for this folder:
 | [log-011.md](log-011.md) | Reviews of the arm sessions: deviations listed (not clean checks), periodic 15 s stalls + PC Wi-Fi power save, runbook rewrite (daily go/no-go, R1-R4, esc after release), posture limit 60°, gripper options. |
 | [log-012.md](log-012.md) | Gripper gentle sync (30°/s until the trigger matches, then 120°/s) replaces the soft takeover; options compared; 72 tests; −60° still to measure on the arm. |
 | [log-013.md](log-013.md) | Periodic 15 s input stalls: PC Wi-Fi power save turned off (not the cause), link pings fine → headset/app side; stale limit 0.25 → 0.4 s (`--stale-s`), replay of session 2: 2 → 0 stale FAULTs; 72 tests. |
+| [log-014.md](log-014.md) | Arm session 3 (Kota-san / Suraj): directions and gripper by trigger work on the real arm, 0 stale FAULTs with 0.4 s, correct esc order; next: wrist rotation (6-DOF IK) and gripper force feedback (needs follower feedback; PICO haptics not in the SDK binding). |
