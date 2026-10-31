@@ -16,7 +16,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 1 input-only diagnostic | **PASS live** 2026-10-31, all 5 phases (log-007, `evidence/gate1`) | — (finding: a hidden controller is not detectable) |
 | 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | measure the real grasp point (`--tcp-offset-m`); view a run in Meshcat |
 | 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
-| 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
+| 4 recording dry run | **PASS** 2026-10-31: lerobot-record with the PICO, chest + left wrist, follower tracks the actions (log-020) | a leader-arm recording with the same command for the side-by-side schema check |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
 | 2b wrist rotation | offline + dry run PASS (log-015/016); **real arm: small single-axis turns ≤ 15° followed 1:1, 0 FAULTs** (session 5, log-019; spotter-rule deviation) | repeat with a separate spotter; larger turns; right arm |
 | 5 hardware | **PASS** 2026-10-31, left arm: directions (session 2) and gripper by trigger (session 3), operator Kota-san, spotter Suraj (log-010/011/014) | right arm; wrist rotation; gripper force feedback; follower-feedback patch (Kento) |
