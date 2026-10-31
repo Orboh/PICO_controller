@@ -108,7 +108,8 @@ def test_unreachable_rotation_faults():
         events.append(out.event or "")
         if out.state == FAULT:
             break
-    assert out.state == FAULT and any(k in out.event for k in ("rotation", "IK jumped", "posture", "singular"))
+    assert out.state == FAULT and any(k in out.event for k in ("rotation", "IK jumped", "posture", "singular",
+                                                               "session start"))
 
 
 def _c_rot(R_robot, delta=(0, 0, 0), grip=1.0):
@@ -174,3 +175,38 @@ def test_reengage_while_rotated_has_no_jump():
     assert out.state == ENGAGED and out.action == held
     out = arm.step(ADAPT(_c((0, 1, 0), 35.0), True))
     assert max(abs(out.action[k] - held[k]) for k in held) < 0.05
+
+
+def test_same_fault_twice_locks_engaging():
+    """Session 4: FAULT -> release -> re-engage loops let the arm creep to its limits (log-017)."""
+    arm = _arm(orientation=False)
+    for _ in range(2):
+        out = arm.step(ADAPT(_c(delta=(2.0, 0, 0)), True))     # unreachable / lag FAULT
+        assert out.state == FAULT
+        arm.step(ADAPT(_c(grip=0.0), True))                     # release
+        out = arm.step(ADAPT(_c(), True))                       # squeeze again
+    assert arm.locked and out.state != ENGAGED and "LOCKED" in (out.event or "") + arm.locked
+    for _ in range(20):
+        assert arm.step(ADAPT(_c(), True)).state != ENGAGED
+
+
+def test_session_drift_limit_refuses_and_faults():
+    arm = _arm(orientation=False, max_session_drift_deg=20.0)
+    events = [arm.step(ADAPT(_c(delta=(0.0, 0.003 * i, 0.0)), True)).event for i in range(1, 300)]
+    assert any(e and "session start pose" in e for e in events)
+    arm.step(ADAPT(_c(grip=0.0), True))
+    out = arm.step(ADAPT(_c(), True))
+    if arm.state != ENGAGED:   # far from the start: engage refused
+        assert "session start pose" in (out.event or "")
+
+
+def test_orientation_follows_position_when_rotation_unreachable():
+    """Softer orientation: a slightly unreachable rotation does not FAULT; position still follows."""
+    arm = _arm()
+    p0 = arm.kin.fk(arm.q).translation.copy()
+    for i in range(1, 80):
+        out = arm.step(ADAPT(_c((1, 0, 0), min(0.6 * i, 30.0), delta=(0.0, 0.0, 0.0005 * i)), True))
+        if out.state == FAULT:
+            break
+    moved = (arm.kin.fk(arm.q).translation - p0)[2]
+    assert moved > 0.005 or (out.state == FAULT and "rotation" in out.event)

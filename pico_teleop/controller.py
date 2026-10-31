@@ -74,6 +74,12 @@ class TeleopConfig:
     max_hand_rot_speed_dps: float = 720.0  # hand rotation speed on the device clock -> FAULT. Live data
                                            # (log-015): normal p99 <= 220, max 470 deg/s; catch-ups 1732-4466
     max_rot_lag_deg: float = 40.0      # gripper target trailing the hand's asked rotation -> FAULT
+    rot_fault_deg: float = 20.0        # orientation off by more than this after IK -> FAULT; below it the
+                                       # gripper follows the position with the best reachable rotation
+    # --- session guards (log-017, after arm session 4: 58 FAULTs, re-engage loops, arm crept to limits)
+    fault_lock_count: int = 2          # the same FAULT this many times ...
+    fault_lock_window_s: float = 30.0  # ... within this window -> engaging LOCKED until the sender restarts
+    max_session_drift_deg: float = 60.0  # no joint may get further than this from the session's start pose
     joint_margin_deg: float = 2.0
 
 
@@ -139,6 +145,10 @@ class ArmTeleop:
         self.p_target: np.ndarray | None = None
         self.q_ik = self.q.copy()          # last IK answer; self.q (sent) trails it by the rate limit
         self.grip_synced = False
+        self.q_session = self.q.copy()     # start pose of this sender session (drift limit)
+        self.n_steps = 0                   # step() calls; x dt = session time for the FAULT window
+        self.fault_times: dict[str, list[float]] = {}
+        self.locked: str | None = None     # reason engaging is locked (cleared only by a restart)
         self.squeeze_steps = 0             # consecutive valid squeezed steps while HOLD (engage delay)
         self.squeeze_t0: float | None = None  # device time the current squeeze started
         self.last_hand: tuple[float, np.ndarray] | None = None  # (device t, pos) for the speed check
@@ -159,6 +169,14 @@ class ArmTeleop:
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
         self.q_ik = self.q.copy()
+        key = why.split("(")[0].split(":")[0].strip()[:30]
+        now = self.n_steps * self.dt
+        times = [t for t in self.fault_times.get(key, []) if now - t <= self.cfg.fault_lock_window_s] + [now]
+        self.fault_times[key] = times
+        if len(times) >= self.cfg.fault_lock_count and self.locked is None:
+            self.locked = (f"the same FAULT ({key}) {len(times)}x within {self.cfg.fault_lock_window_s:.0f} s: "
+                           "engaging LOCKED. Stop: esc the follower, restart follower and sender (R2)")
+            return self._out(f"FAULT: {why} | LOCKED: {self.locked}")
         return self._out(f"FAULT: {why} (targets frozen; release grip, then squeeze to re-anchor)")
 
     def reset_to(self, action: dict[str, float]) -> None:
@@ -199,6 +217,7 @@ class ArmTeleop:
 
     def step(self, h: HandInput) -> StepOut:
         cfg = self.cfg
+        self.n_steps += 1
         released = h.valid and h.clutch < cfg.clutch_off   # only a VALID sample can count as a release
         if released:
             self.armed = True
@@ -218,6 +237,14 @@ class ArmTeleop:
             if not (h.valid and self.armed and h.clutch >= cfg.clutch_on):
                 self.reset_squeeze()
                 return self._out()
+            if self.locked:
+                self.reset_squeeze()
+                return self._out("engage refused: " + self.locked)
+            drift = float(np.max(np.abs(np.rad2deg(self.q - self.q_session))))
+            if drift > cfg.max_session_drift_deg:
+                self.reset_squeeze()
+                return self._out(f"engage refused: the arm is {drift:.0f} deg from the session start pose "
+                                 f"(> {cfg.max_session_drift_deg:.0f}): end with esc and restart (R2)")
             # Hold time on the DEVICE clock when known (a stalled sample must not count), else ticks.
             self.squeeze_steps += 1
             if h.t is not None and self.squeeze_t0 is None:
@@ -290,9 +317,18 @@ class ArmTeleop:
                 R_tgt = pin.exp3(w * (lim_r / ang) if ang > lim_r else w) @ self.R_target
                 res, rot_err = self.kin.solve_pose(p_tgt, R_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
                                                    max_iter=cfg.ik_max_iter, w_rot=cfg.ik_rot_weight)
-                if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
-                    return self._fault(f"wrist cannot reach that rotation ({math.degrees(rot_err):.1f} deg off): "
+                if res.err_m > cfg.ik_tol_m:
+                    # Position first: if position + rotation together are not reachable, follow the
+                    # position with the rotation the arm can do (orientation free, seeded here).
+                    res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
+                                                  max_iter=cfg.ik_max_iter)
+                    R_got = self.kin.fk(res.q).rotation
+                    rot_err = float(np.linalg.norm(pin.log3(R_got @ R_tgt.T)))
+                if math.degrees(rot_err) > cfg.rot_fault_deg:
+                    return self._fault(f"wrist cannot reach that rotation ({math.degrees(rot_err):.0f} deg off): "
                                        "turn the hand back")
+                if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
+                    R_tgt = self.kin.fk(res.q).rotation  # best reachable rotation becomes the target
             else:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
@@ -303,6 +339,11 @@ class ArmTeleop:
             jump = float(np.max(np.abs(np.rad2deg(res.q - self.q_ik))))
             if jump > cfg.max_ik_jump_deg:
                 return self._fault(f"IK jumped {jump:.1f} deg in one cycle (> {cfg.max_ik_jump_deg})")
+            drift = np.abs(np.rad2deg(res.q - self.q_session))
+            if drift.max() > cfg.max_session_drift_deg:
+                j = int(drift.argmax()) + 1
+                return self._fault(f"joint_{j} would be {drift.max():.0f} deg from the session start pose "
+                                   f"(> {cfg.max_session_drift_deg:.0f}): bring the hand back")
             posture = np.abs(np.rad2deg(res.q - self.anchor_q))
             if posture.max() > cfg.max_posture_change_deg:
                 j = int(posture.argmax()) + 1

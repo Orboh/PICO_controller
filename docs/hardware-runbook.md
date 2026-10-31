@@ -80,4 +80,5 @@ If anything surprises anyone: **stop** (spotter card below).
 | wearer squeezes before "ready" | call "release" | repeat R1 |
 | (with `--orientation`) the wrist turns while the hand's position is still | expected only if the wearer turned the hand (it may finish turning ~0.5 s later, 90°/s limit); otherwise call "release" | — |
 | (with `--orientation`) fingers or the flange swing toward the table or the arm | call "release" | if it does not stop: emergency stop |
+| `LOCKED` in the terminal | the sender refuses to engage until restarted (same FAULT twice in 30 s) | stop: release, `esc`, restart both (R2); log why it repeated |
 | anything unexpected | stop the session | log it before resuming |
