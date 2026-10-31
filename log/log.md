@@ -26,3 +26,4 @@ Rules for this folder:
 | [log-016.md](log-016.md) | Wrist dry run: swapped-looking axes were the operator facing −100° (headset data), math matches upstream XRoboToolkit; new facing guard (refuse/FAULT beyond 30°); 90 tests. |
 | [log-017.md](log-017.md) | Arm session 4 (wrist, Suraj/Kota-san): 100 engages / 58 FAULTs, re-engage loops crept the arm to joint limits; fixes: same-FAULT lockout, 60° session drift limit, softer orientation; replay 14 engages / 5 FAULTs, locked at 135 s; 93 tests. |
 | [log-018.md](log-018.md) | Review of the session-4 fixes: number-free FAULT kinds, lock on 3 mixed FAULTs/60 s, one refusal per squeeze, 3° joint-limit guard, rotation gap vs the hand (0.5 s), fallback exercised; replay locks at 80 s; 97 tests. |
+| [log-019.md](log-019.md) | Arm session 5 (wrist rotation, fixed controller): forward/roll/pitch/yaw followed 1:1, 0 FAULTs; deviation: operator and spotter were the same person (rule needs a second person at the arm). |
