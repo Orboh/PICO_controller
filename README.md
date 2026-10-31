@@ -23,6 +23,11 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
+## To do after the PICO data collection
+- [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set
+  (and the PICO) at −63.4° (~89° apart, log-021). Check the leader↔follower joint_7 calibration; redo pilot block 1.
+- [ ] Block-1 outcomes per episode (grasp / place) from the operator.
+
 ## Controls (sender, gate 3 onward)
 
 Left controller drives the left arm, right controller the right arm. Stand **behind the robot,
