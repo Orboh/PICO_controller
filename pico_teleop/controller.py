@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+import pinocchio as pin
 
 from .frames import controller_in_robot
 from .kinematics import ArmKinematics, deg_dict_to_q, q_to_action
@@ -64,6 +65,12 @@ class TeleopConfig:
     max_lag_deg: float = 10.0          # sent joints may trail the IK answer by this much; beyond it
                                        # the TCP target waits for the joints to catch up
     operator_yaw_deg: float = 0.0      # operator facing direction relative to robot +x
+    # --- wrist rotation (log-015). OFF by default until validated in a dry run and on the arm.
+    orientation: bool = False          # True: the hand's rotation (since engage) also turns the gripper
+    max_rot_speed_dps: float = 90.0    # rate limit of the gripper's target rotation
+    ik_rot_tol_deg: float = 3.0        # accepted orientation error, else FAULT (unreachable)
+    ik_rot_weight: float = 0.3         # IK weight: 1 rad of orientation error ~ 0.3 m of position
+    max_hand_rot_step_deg: float = 45.0  # hand rotated this much in ONE device update -> FAULT
     joint_margin_deg: float = 2.0
 
 
@@ -77,6 +84,7 @@ class HandInput:
     gripper: float               # 0..1, 0 = open, 1 = closed (PICO: trigger)
     why_invalid: str = ""
     t: float | None = None       # sample time on the DEVICE clock [s] (None: speed check skipped)
+    rot: np.ndarray | None = None  # hand rotation in the ROBOT frame (3x3); used with orientation
 
 
 class PicoAdapter:
@@ -94,8 +102,9 @@ class PicoAdapter:
             return HandInput(False, None, 0.0, 0.0, f"pose {ps}")
         if not (analog_ok(c.grip) and analog_ok(c.trigger)):
             return HandInput(False, None, 0.0, 0.0, f"grip/trigger out of range ({c.grip!r}, {c.trigger!r})")
-        pos, _ = controller_in_robot(c.pose, self.yaw)
-        return HandInput(True, pos, min(max(c.grip, 0.0), 1.0), min(max(c.trigger, 0.0), 1.0), t=t_device)
+        pos, rot = controller_in_robot(c.pose, self.yaw)
+        return HandInput(True, pos, min(max(c.grip, 0.0), 1.0), min(max(c.trigger, 0.0), 1.0), t=t_device,
+                         rot=rot)
 
 
 @dataclass
@@ -130,6 +139,10 @@ class ArmTeleop:
         self.squeeze_steps = 0             # consecutive valid squeezed steps while HOLD (engage delay)
         self.squeeze_t0: float | None = None  # device time the current squeeze started
         self.last_hand: tuple[float, np.ndarray] | None = None  # (device t, pos) for the speed check
+        self.last_hand_rot: np.ndarray | None = None
+        self.anchor_hand_rot: np.ndarray | None = None
+        self.anchor_tcp_rot: np.ndarray | None = None
+        self.R_target: np.ndarray | None = None       # rate-limited gripper orientation target
         self.dt = 1.0 / self.cfg.hz
 
     # ------------------------------------------------------------------------------------
@@ -211,7 +224,12 @@ class ArmTeleop:
             self.reset_squeeze()
             self.last_hand = (h.t, h.pos.copy()) if h.t is not None else None
             self.anchor_hand = h.pos.copy()
-            self.anchor_tcp = self.kin.fk(self.q).translation.copy()
+            M0 = self.kin.fk(self.q)
+            self.anchor_tcp = M0.translation.copy()
+            self.anchor_tcp_rot = M0.rotation.copy()
+            self.R_target = M0.rotation.copy()
+            self.anchor_hand_rot = h.rot.copy() if h.rot is not None else None
+            self.last_hand_rot = self.anchor_hand_rot
             self.anchor_q = self.q.copy()
             self.p_target = self.anchor_tcp.copy()
             self.q_ik = self.q.copy()
@@ -231,6 +249,12 @@ class ArmTeleop:
                                        "tracking catch-up? keep the controller in view")
             if self.last_hand is None or h.t > self.last_hand[0]:
                 self.last_hand = (h.t, h.pos.copy())
+        if cfg.orientation and h.rot is not None and self.last_hand_rot is not None:
+            step = math.degrees(float(np.linalg.norm(pin.log3(h.rot @ self.last_hand_rot.T))))
+            if step > cfg.max_hand_rot_step_deg:
+                return self._fault(f"hand rotation jumped {step:.0f} deg in one update "
+                                   f"(> {cfg.max_hand_rot_step_deg:.0f}): tracking catch-up? keep it in view")
+            self.last_hand_rot = h.rot.copy()
         p_des_check = self.anchor_tcp + cfg.scale * (h.pos - self.anchor_hand)
         lag_m = float(np.linalg.norm(p_des_check - self.p_target))
         if lag_m > cfg.max_target_lag_m:
@@ -245,8 +269,21 @@ class ArmTeleop:
             lim = cfg.max_tcp_speed_mps * self.dt
             n = float(np.linalg.norm(d))
             p_tgt = self.p_target + (d * (lim / n) if n > lim else d)
-            res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
-                                         limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
+            R_tgt = None
+            if cfg.orientation and h.rot is not None and self.anchor_hand_rot is not None:
+                # desired = (hand rotation since engage, robot frame) applied to the gripper's anchor
+                R_des = (h.rot @ self.anchor_hand_rot.T) @ self.anchor_tcp_rot
+                w = pin.log3(R_des @ self.R_target.T)
+                ang, lim_r = float(np.linalg.norm(w)), math.radians(cfg.max_rot_speed_dps) * self.dt
+                R_tgt = pin.exp3(w * (lim_r / ang) if ang > lim_r else w) @ self.R_target
+                res, rot_err = self.kin.solve_pose(p_tgt, R_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
+                                                   max_iter=cfg.ik_max_iter, w_rot=cfg.ik_rot_weight)
+                if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
+                    return self._fault(f"wrist cannot reach that rotation ({math.degrees(rot_err):.1f} deg off): "
+                                       "turn the hand back")
+            else:
+                res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
+                                             limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
             if res.err_m > cfg.ik_tol_m:
                 return self._fault(f"IK did not converge ({res.err_m * 1000:.1f} mm): target unreachable")
             if res.sigma_min < cfg.min_sigma:
@@ -260,6 +297,8 @@ class ArmTeleop:
                 return self._fault(f"joint_{j} would move {posture.max():.0f} deg from where you engaged "
                                    f"(> {cfg.max_posture_change_deg:.0f}): large posture change")
             self.p_target, self.q_ik, err, sigma = p_tgt, res.q, res.err_m, res.sigma_min
+            if R_tgt is not None:
+                self.R_target = R_tgt
         qlim = math.radians(cfg.max_joint_speed_dps) * self.dt
         self.q = self.kin.clamp(self.q + np.clip(self.q_ik - self.q, -qlim, qlim))
 

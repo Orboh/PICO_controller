@@ -126,6 +126,42 @@ class ArmKinematics:
         err = float(np.linalg.norm(self.fk(q).translation - p_tgt))
         return IKResult(q, err <= tol_m, err, max_iter, self.sigma_min(q))
 
+    def jac6(self, q) -> np.ndarray:
+        """6x7 TCP Jacobian, world-aligned: rows 0-2 linear, 3-5 angular."""
+        return pin.computeFrameJacobian(self.model, self.data, np.asarray(q, float), self.tcp_fid,
+                                        pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+
+    def solve_pose(self, p_target, R_target, q_seed, tol_m: float = 1e-4, tol_rad: float = 1e-3,
+                   max_iter: int = 60, damp: float = 1e-3, max_dq: float = 0.2,
+                   w_rot: float = 0.3) -> tuple[IKResult, float]:
+        """Damped least squares toward a TCP position AND orientation (world frame), on joint limits.
+
+        `w_rot` (m/rad) weights the orientation error against the position error, so 1 rad of
+        rotation counts like `w_rot` metres. Returns (IKResult with the position error, rotation
+        error in rad). Same seeding and step bound as `solve_position`.
+        """
+        p_tgt = np.asarray(p_target, dtype=float)
+        R_tgt = np.asarray(R_target, dtype=float)
+        W = np.diag([1.0, 1.0, 1.0, w_rot, w_rot, w_rot])
+        q = self.clamp(q_seed)
+        for it in range(max_iter):
+            M = self.fk(q)
+            e_p = M.translation - p_tgt
+            e_r = pin.log3(M.rotation @ R_tgt.T)           # world-frame rotation error (rad, axis*angle)
+            if np.linalg.norm(e_p) <= tol_m and np.linalg.norm(e_r) <= tol_rad:
+                break
+            J = W @ self.jac6(q)
+            e = W @ np.concatenate([e_p, e_r])
+            dq = -J.T @ np.linalg.solve(J @ J.T + damp * np.eye(6), e)
+            n = np.max(np.abs(dq))
+            if n > max_dq:
+                dq *= max_dq / n
+            q = self.clamp(q + dq)
+        M = self.fk(q)
+        err_p = float(np.linalg.norm(M.translation - p_tgt))
+        err_r = float(np.linalg.norm(pin.log3(M.rotation @ R_tgt.T)))
+        return IKResult(q, err_p <= tol_m and err_r <= tol_rad, err_p, it + 1, self.sigma_min(q)), err_r
+
     # --- limits and unit bridges ----------------------------------------------------------
     def limit_push(self, q, band_deg: float) -> np.ndarray:
         """Per joint in [-1, 1]: +1 at the lower limit, -1 at the upper, 0 beyond `band_deg` from both."""

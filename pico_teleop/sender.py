@@ -25,6 +25,9 @@ import os
 import sys
 import time
 
+import numpy as np
+import pinocchio as pin
+
 from .controller import ENGAGED, HOLD, ArmTeleop, PicoAdapter, TeleopConfig
 from .kinematics import DEFAULT_TCP_OFFSET_M, DEFAULT_URDF, ArmKinematics
 from .poses import POSE_SETS, current_pose_set, load_start_pose, pose_file, pose_file_sha
@@ -257,6 +260,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--urdf", default=DEFAULT_URDF)
     ap.add_argument("--tcp-offset-m", type=float, default=DEFAULT_TCP_OFFSET_M,
                     help="link7 -> grasp point along the gripper axis (0.1025 = finger root; measure it)")
+    ap.add_argument("--orientation", action="store_true",
+                    help="wrist rotation: the hand's rotation since engage also turns the gripper (log-015)")
     ap.add_argument("--hz", type=float, default=50.0)
     ap.add_argument("--scale", type=float, default=0.5)
     ap.add_argument("--port-offset", type=int, default=0, help="tests only: shift 5701/5711 etc.")
@@ -290,7 +295,7 @@ def main(argv=None) -> int:
         return 2
     pose_set = a.pose_set or current_pose_set(a.pose_sets_dir)
     sides = ["left", "right"] if a.arms == "both" else [a.arms]
-    cfg = TeleopConfig(hz=a.hz, scale=a.scale)
+    cfg = TeleopConfig(hz=a.hz, scale=a.scale, orientation=a.orientation)
     chans = []
     for s in sides:
         link = None if a.dry_run else Link(a.host, PORTS[s] + a.port_offset, ECHO_PORTS[s] + a.port_offset)
@@ -314,6 +319,7 @@ def main(argv=None) -> int:
     log.write(json.dumps({"session": session, "pose_set": pose_set, "args": vars(a), "config": vars(cfg),
                           "pose_sha": {s: pose_file_sha(s, pose_set, a.pose_sets_dir) for s in sides}}) + "\n")
     print(f"[sender] pose_set={pose_set} arms={sides} host={a.host} hz={a.hz} scale={a.scale} "
+          f"orientation={'ON' if a.orientation else 'off'} "
           f"dry_run={a.dry_run} log={log_path}\n[sender] squeeze GRIP to follow, release to hold; "
           f"TRIGGER closes the gripper. Ctrl-C stops (receiver holds the last pose).", flush=True)
     period, t_start, last_print = 1.0 / a.hz, time.monotonic(), 0.0
@@ -339,9 +345,14 @@ def main(argv=None) -> int:
                     # TCP motion since engage, robot frame (x fwd, y left, z up): the axis-sign check
                     tcp = ch.arm.kin.fk(ch.arm.q).translation
                     d = (tcp - ch.arm.anchor_tcp) * 100 if ch.arm.anchor_tcp is not None else tcp * 0
+                    rot = ""
+                    if cfg.orientation and ch.arm.anchor_tcp_rot is not None:
+                        # gripper rotation since engage, as a rotation vector in the robot frame [deg]
+                        w = np.degrees(pin.log3(ch.arm.kin.fk(ch.arm.q).rotation @ ch.arm.anchor_tcp_rot.T))
+                        rot = f" rot x{w[0]:+5.0f} y{w[1]:+5.0f} z{w[2]:+5.0f} deg"
                     lk = "SENDING STOPPED " if ch.stopped else ("LINK DOWN " if ch.link_down else "")
                     print(f"[{ch.side:5s}] {lk}{ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
-                          f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm", flush=True)
+                          f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm{rot}", flush=True)
             if chans and all(ch.stopped for ch in chans):
                 print("[sender] sending stopped on every arm: exiting", flush=True)
                 break

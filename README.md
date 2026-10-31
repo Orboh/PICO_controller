@@ -33,6 +33,7 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 | **Grip, open fully (< 0.4)** | HOLD: no new targets are sent; the arm finishes the last small step (≤ 0.9° per joint, one 20 ms cycle) and stays there. Settling on the real arm: to be measured in the first 2 cm test. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-58°, 2° short of the measured stop at -60.1°), fully pulled = closed (0°). **Gentle sync:** after each engage the gripper moves **slowly (30°/s)** toward where the trigger says until they match, then follows at normal speed. Example: at start the gripper is closed and the trigger released, so after engaging it opens slowly over ~2 s; release the grip to stop it. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
+| **Wrist rotation** (only with `--orientation`) | turning your hand turns the gripper about the same axis by the same angle (relative to how it was when you engaged), at most 90°/s; position keeps following as usual | ENGAGED only; off by default until validated on the arm |
 | A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
 | **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). Before starting the sender again: restart the follower (runbook R2). | always |
 
@@ -55,6 +56,8 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
+| `wrist cannot reach that rotation` | the asked rotation is beyond the wrist's range (e.g. joint_6 ±45°) | turn the hand back toward where you engaged, release, squeeze |
+| `hand rotation jumped … deg in one update` | the controller's rotation jumped (tracking catch-up) | keep the controller in view; release, squeeze |
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
