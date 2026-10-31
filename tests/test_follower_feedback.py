@@ -26,10 +26,12 @@ class StubLink:
     def send(self, msg):
         self.sent.append(msg)
 
+    foreign_echo = 0
+
 
 def _ch(follower_offset_deg):
     link = StubLink()
-    ch = ArmChannel("right", load_start_pose("right"), TeleopConfig(), link, DEFAULT_URDF, 1.0,
+    ch = ArmChannel("right", load_start_pose("right"), TeleopConfig(engage_hold_s=0.0), link, DEFAULT_URDF, 1.0,
                     DEFAULT_TCP_OFFSET_M)
     link.follower = {k: v + (follower_offset_deg if k == "joint_2.pos" else 0.0) for k, v in ch.last_sent.items()}
     link.follower_t = time.monotonic()
@@ -81,15 +83,24 @@ def test_no_engage_before_receiver_echoes():
     assert len(ch.link.sent) == 2  # still sending the start pose (the receiver needs a first packet)
 
 
-def test_link_loss_faults_and_stops_sending():
+def test_link_loss_faults_but_keeps_sending_hold():
+    """Elephant m4 #6: a silent receiver (episode save) must not end the session."""
     ch = _ch(0.0)
     _tick(ch, 0.0, 0); _tick(ch, 1.0, 1)
     assert ch.arm.state == ENGAGED
     ch.link.silent, ch.link.last_echo_t = True, time.monotonic() - 2.0
     act, ev = _tick(ch, 1.0, 2)
-    assert act is None and "SENDING STOPPED" in ev and ch.arm.state == "FAULT"
-    n = len(ch.link.sent)
-    assert _tick(ch, 1.0, 3) == (None, None) and len(ch.link.sent) == n
+    assert "LINK DOWN" in ev and ch.arm.state == "FAULT"
+    held = act
+    for i in range(5):  # keeps sending the same HOLD target, cannot engage
+        act, _ = _tick(ch, 0.0 if i == 0 else 1.0, 3 + i)
+        assert act == held and ch.arm.state != ENGAGED
+    assert len(ch.link.sent) == 8
+    ch.link.silent = False
+    ch.link.last_echo_t = time.monotonic()
+    ch.link.first_echo_t = ch.link.last_echo_t - 1.0
+    _, ev = _tick(ch, 0.0, 9)
+    assert "link back" in ev
 
 
 def test_soft_move_only_in_hold_and_checked():

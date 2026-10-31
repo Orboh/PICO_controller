@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import uuid
+from collections import deque
 import os
 import sys
 import time
@@ -54,9 +55,11 @@ class Link:
         self.follower: dict[str, float] | None = None   # measured joints, if the receiver sends them
         self.follower_t: float | None = None
         self.rtt_ms: float | None = None
-        self.sent = self.dropped = self.bad_echo = 0
+        self.sent = self.dropped = self.bad_echo = self.foreign_echo = 0
+        self.recent_t: deque[float] = deque(maxlen=1000)  # t_mono of our last ~20 s of packets
 
     def send(self, msg: dict) -> None:
+        self.recent_t.append(msg["t_mono"])
         try:
             self.push.send_string(json.dumps(msg), flags=self.zmq.NOBLOCK)
             self.sent += 1
@@ -79,18 +82,23 @@ class Link:
                 self.bad_echo += 1
                 continue
             now = time.monotonic()
+            if "seq" in e:  # a stream echo: it must echo one of OUR packets (else: a second sender)
+                if not (_finite(e.get("t_mono")) and float(e["t_mono"]) in self.recent_t):
+                    self.foreign_echo += 1
+                    continue
+                self.rtt_ms = (now - float(e["t_mono"])) * 1000.0
             if self.last_echo_t is None or now - self.last_echo_t > gap_s:
                 self.first_echo_t = now
             self.last_echo_t = now
-            if _finite(e.get("t_mono")):
-                self.rtt_ms = (now - float(e["t_mono"])) * 1000.0
             fol = e.get("follower")  # proposals/lerobot-follower-feedback.patch
             if isinstance(fol, dict) and all(_finite(fol.get(f"joint_{i}.pos")) for i in range(1, 8)):
                 self.follower, self.follower_t = {k: float(v) for k, v in fol.items() if _finite(v)}, now
             if e.get("cmd") == "soft_move_to":
                 pose = e.get("pose")
+                dur = e.get("duration_s", 2.0)
                 if isinstance(pose, dict) and all(_finite(pose.get(f"joint_{i}")) for i in range(1, 8)) \
-                        and (pose.get("gripper") is None or _finite(pose.get("gripper"))):
+                        and (pose.get("gripper") is None or _finite(pose.get("gripper"))) \
+                        and _finite(dur) and 0.0 < float(dur) <= 30.0:
                     cmd = e
                 else:
                     self.bad_echo += 1
@@ -120,7 +128,7 @@ class ArmChannel:
         self.move: dict | None = None
         self.move_deadline = 0.0
         self.last_move_id = None
-        self.link_down = False          # set after a confirmed link was lost: sending stops for good
+        self.link_down = False          # receiver silent > link_timeout_s (we keep sending HOLD)
         self.last_refusal_t = 0.0
 
     def link_state(self, now: float) -> str:
@@ -158,21 +166,33 @@ class ArmChannel:
         self.move_deadline = now + float(cmd.get("duration_s") or 2.0) + 4.0  # receiver gives up then
         return "soft_move_to: moving the HOLD target to the requested pose"
 
-    def tick(self, ctrl, fresh: bool, stream_state: str, now: float) -> tuple[dict | None, str | None]:
-        """One cycle. Returns (action sent or None if sending has stopped, event text)."""
-        if self.link_down:
-            return None, None
+    def tick(self, ctrl, fresh: bool, stream_state: str, now: float,
+             t_device: float | None = None) -> tuple[dict, str | None]:
+        """One cycle: always sends one validated packet (the HOLD target when nothing may move).
+
+        A silent receiver (> link_timeout_s without echo) = FAULT + no engagement, but we keep
+        sending: lerobot-record stops calling get_action (no echoes) while it saves an episode or
+        waits at the start-pose gate (Elephant m4 #6). Following resumes only after a release, a
+        new squeeze and 0.5 s of fresh echoes. A receiver RESTART cannot be told apart from such a
+        pause without follower feedback: runbook R2 (restart the sender too) covers it.
+        """
         event = None
         if self.link is not None:
+            nf = self.link.foreign_echo
             cmd = self.link.poll(self.link_timeout_s)
+            if self.link.foreign_echo > nf:
+                event = self.arm.force_fault("echo of packets we did not send: another sender on this "
+                                             "port? (never run leader_agent and PICO on one arm)").event
             if cmd is not None and cmd.get("cmd_id") != self.last_move_id:
                 self.last_move_id = cmd.get("cmd_id")
                 event = self._accept_move(cmd, now)
         ls = self.link_state(now)
-        if ls == "lost":
-            ev = self.arm.force_fault("link lost: no echo from the receiver").event
+        if ls == "lost" and not self.link_down:
             self.link_down = True
-            return None, (ev or "") + " | link lost: SENDING STOPPED. Restart the follower, then the sender (runbook R2)"
+            event = (self.arm.force_fault("link lost: no echo from the receiver").event or "") + \
+                " | LINK DOWN: holding; if the follower was restarted, restart this sender too (runbook R2)"
+        elif ls == "ok" and self.link_down:
+            self.link_down, event = False, "link back: release the grip, then squeeze to continue"
         if self.move is not None and (self.arm.state != HOLD or now > self.move_deadline):
             self.move, event = None, "soft_move_to cancelled (left HOLD or expired)"
         if self.move is not None:
@@ -180,13 +200,14 @@ class ArmChannel:
                 event, self.move = "soft_move_to: arrived at the requested pose", None
         else:
             ok = ls in ("ok", "dry")
-            why = "waiting for the receiver (no echo yet: follower not ready)" if not ok else f"input {stream_state}"
+            why = {"waiting": "waiting for the receiver (no echo yet: follower not ready)",
+                   "lost": "link down: no echo from the receiver"}.get(ls, f"input {stream_state}")
             fe = self.follower_error(now)
             if fe is not None and fe[0] > self.max_track_err_deg:
                 ok, why = False, f"follower {fe[1]} is {fe[0]:.1f} deg from the command (> {self.max_track_err_deg})"
-            h = self.adapter(ctrl, fresh and ok, why)
+            h = self.adapter(ctrl, fresh and ok, why, t_device)
             out = self.arm.step(h)
-            event = out.event or event
+            event = " | ".join(e for e in (event, out.event) if e) or None
             squeezed = ctrl.grip >= self.arm.cfg.clutch_on if _finite(ctrl.grip) else False
             if not ok and out.state == HOLD and squeezed and now - self.last_refusal_t > 2.0:
                 self.last_refusal_t, event = now, f"engage refused: {why}"
@@ -229,6 +250,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     a = parse_args(argv)
+    if a.port_offset != 0 and a.port_offset < 10000:  # e.g. +1 would turn right 5701 into LEFT 5702
+        print("[sender] REFUSED: --port-offset must be 0 (real ports) or >= 10000 (tests)", file=sys.stderr)
+        return 2
     real_ports = not a.dry_run and a.port_offset == 0  # 5701/5702: a real follower may listen, any host
     if real_ports and not a.confirm_follower_at_start_pose:
         print("[sender] REFUSED: ports 5701/5702 can drive a real follower. Follow docs/hardware-runbook.md "
@@ -252,7 +276,9 @@ def main(argv=None) -> int:
               "(compare with the follower PC: sha256sum of its CURRENT set's file), limits (deg, margin incl.) "
               f"{ {k: tuple(round(x, 1) for x in v) for k, v in ch.val.limits.items()} }", flush=True)
     src = ReplaySource(a.replay) if a.replay else SdkSource()
-    # 0.25 s: live Wi-Fi had 25 gaps > 100 ms per minute (log-007); 0.25 s = the receiver hold threshold
+    # 0.25 s, from live input gaps (log-007/008): ~1 % of PICO updates arrive > 100 ms apart; 0.25 s
+    # bounds how long the arm may keep moving on frozen input (<= 0.25 m/s * 0.25 s = 6 cm of TCP).
+    # Not the same quantity as the receiver's 250 ms (sender->receiver packets). diag uses 0.1 s.
     tr = FreshnessTracker(stale_s=0.25)
     log_path = a.log or time.strftime("runs/sender-%Y%m%d-%H%M%S.jsonl")
     os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
@@ -271,7 +297,8 @@ def main(argv=None) -> int:
             tr.update(fr)
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
             for ch in chans:
-                act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}", t0)
+                act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}",
+                                  t0, fr.t_device_ns / 1e9 if fr.t_device_ns else None)
                 rec["arms"][ch.side] = {"state": ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
                                         "follower": ch.link.follower if ch.link else None}
@@ -285,11 +312,9 @@ def main(argv=None) -> int:
                     # TCP motion since engage, robot frame (x fwd, y left, z up): the axis-sign check
                     tcp = ch.arm.kin.fk(ch.arm.q).translation
                     d = (tcp - ch.arm.anchor_tcp) * 100 if ch.arm.anchor_tcp is not None else tcp * 0
-                    print(f"[{ch.side:5s}] {ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
+                    lk = "LINK DOWN " if ch.link_down else ""
+                    print(f"[{ch.side:5s}] {lk}{ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
                           f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm", flush=True)
-            if chans and all(ch.link_down for ch in chans):
-                print("[sender] every arm's link is down: exiting", flush=True)
-                break
             if a.replay and src.exhausted:
                 break
             time.sleep(max(period - (time.monotonic() - t0), 0.0))
@@ -301,7 +326,7 @@ def main(argv=None) -> int:
         for ch in chans:
             if ch.link:
                 print(f"[{ch.side}] session={session} sent={ch.link.sent} dropped={ch.link.dropped} "
-                      f"bad_echo={ch.link.bad_echo}")
+                      f"bad_echo={ch.link.bad_echo} foreign_echo={ch.link.foreign_echo}")
                 ch.link.close()
     return 0
 

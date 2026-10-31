@@ -17,7 +17,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | live check of axis signs; measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
 | 3 fake receiver | done offline (real receiver class, localhost) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
-| (all) | | decide: grip held ≥ 0.3 s to engage (trigger pulls the grip by accident, log-007) |
+| 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
 | 5 hardware | **blocked** | follower-pose feedback for the anchor (log-006); safety protocol prerequisites (below); right-arm zero/sign check |
 
 Nothing in this repository has moved an arm.
@@ -29,7 +29,7 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 
 | Input | Effect | When |
 |---|---|---|
-| **Grip, squeeze firmly (> 0.6)** | ENGAGE: the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. | only from HOLD, and only after the grip was seen open once since start (grip already held at start = nothing happens) |
+| **Grip, squeeze and keep holding** | after **0.3 s** of holding: ENGAGE, the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. A short accidental squeeze (e.g. while pulling the trigger) does nothing. | only from HOLD, and only after the grip was seen open once since start (grip already held at start = nothing happens) |
 | **Grip, open fully (< 0.4)** | HOLD: the arm stops at the last sent target and stays there. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-60°), fully pulled = closed (0°). **Soft takeover:** after each engage the gripper does not move until the trigger "meets" its current opening (within 3°): e.g. after start the gripper is closed, so pull the trigger fully first, then let go to open. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
@@ -50,10 +50,13 @@ To recover: open the grip fully, move your hand back toward the middle, squeeze 
 | Message in the terminal | Plain meaning | What to do |
 |---|---|---|
 | `input stale` / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
-| `link lost: no echo from the receiver` | the arm PC stopped answering | spotter checks the arm PC; do not re-squeeze until it is back |
 | `target unreachable` | the hand asked for a point the arm cannot reach | release, bring the hand back toward you, squeeze |
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
+| `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
+| `hand is … cm ahead of the arm target` | you moved faster than the arm may follow (TCP ≤ 0.25 m/s) | release, move slower, squeeze |
+| `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose | wait for `link back`, then release and squeeze. If the follower was restarted: restart the sender too (runbook R2) |
+| `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | stop the session; only one sender per arm |
 | `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 45°) | release, squeeze again: it re-anchors and allows another 45° |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
 
@@ -76,41 +79,76 @@ Preflight (all must be true):
   The diagnostic refuses to start if it finds one, but also check the arm PC by eye.
 - Only one program reads the PICO: a second reader silently gets zeros (Kento's request §8).
 
-1. **Start the PC Service** (any terminal, no sudo; stays in the background):
+1. **PC Service** (no sudo). If `ss -tln | grep -E '63901|60061'` shows both ports it is running:
+   skip the start. Otherwise start it:
    ```bash
    cd /opt/apps/roboticsservice && \
    LD_LIBRARY_PATH=/opt/apps/roboticsservice:/opt/apps/roboticsservice/lib:/opt/apps/roboticsservice/SDK/x64 \
    nohup ./RoboticsServiceProcess > /tmp/roboticsservice.log 2>&1 &
-   ss -tln | grep -E '63901|60061'     # ready when both lines appear
    ```
-   (On this PC it was already running on 2026-10-31.)
-2. **Connect the headset:** PC and PICO on the same Wi-Fi (in the office: `orboh`). Find this PC's IP with `hostname -I`
-   (DHCP: check every session). In the XRoboToolkit app, type it in **"PC Service:"**; wait for
-   **`Status: WORKING`**. Then tick **Controller** and turn **sending on** (Send, or press A once).
-   **A toggles sending: do not press A again.** Close the PC Service's 3D demo window (a second
-   reader gets zeros). Keep the headset on: about 8 s after taking it off it sleeps and the stream stops.
-3. **Run the guided diagnostic** (about 1–2 min; Enter starts each phase, so put the headset on first):
+   **Close its 3D demo** (it is a second reader): `pgrep -af RobotLinuxDemo` must print nothing;
+   if it does, close that window or `kill <pid>`.
+2. **Network:** switch the PC to Wi-Fi **`orboh`** and read its `192.168.0.x` address from
+   `hostname -I` (other addresses there are docker/USB; ignore them). The PICO must be on `orboh` too.
+3. **App:** "PC Service:" = that `192.168.0.x` address → wait for `Status: WORKING` → tick
+   **Controller** → turn sending on (Send in the app). Confirm with the 3-s check below. **From then on
+   never press A** (A toggles sending off). Never short-press Home (leaves the app); recentering is a
+   long press of Home (PICO default; confirm on your unit) and is the only Home use allowed.
+4. **Check data** (prints `rate ~80 Hz | R ok L ok` when good):
    ```bash
-   bash ~/projects/PICO-controller/scripts/pico_env.sh python -m pico_teleop.diag_input
-   # or one phase at a time (what worked on 2026-10-31):
-   bash ~/projects/PICO-controller/scripts/pico_env.sh python -m pico_teleop.diag_input \
-       --no-prompt --phase left --phase-seconds 30 --lead-in-s 8
+   cd ~/projects/PICO-controller && bash scripts/pico_env.sh python -c "import time;from pico_teleop.xr_input import SdkSource,pose_status;s=SdkSource();t=time.monotonic();n=set()
+   while time.monotonic()-t<3: f=s.read();n.add(f.t_device_ns);time.sleep(0.005)
+   s.close();print('rate ~%.0f Hz'%(len(n-{0})/3),'| R',pose_status(f.right.pose),'L',pose_status(f.left.pose))" 2>&1 | grep rate
    ```
-   Phases: left only → right only → hide left → hide right → headset off. Follow the printed text.
-   Never press the PICO/Home system button. Menu buttons are reported, not required.
-4. **Read the result** at the bottom: `GATE 1 (LIVE, recorded to runs/diag-<time>.jsonl): PASS|FAIL`.
-   Each FAIL line names the check. Every invalid / frozen / stale interval is listed as `event:`.
+   `rate ~0 Hz` / `zero`: sending is off (step 3), the demo is open (step 1), or the headset slept.
+   Still zero after all three: restart the service (`pkill -f RoboticsServiceProcess`, then step 1)
+   and reconnect the app. This fixed it on 2026-10-31.
+5. **Keep the headset on** from here (off for about 8 s = sleep = stream stops). A second person reads the
+   phase text below aloud and runs the commands; the wearer only says "go".
+6. **One phase per run** (8 s lead-in after the data check, then the phase):
+   ```bash
+   D="bash scripts/pico_env.sh python -m pico_teleop.diag_input --no-prompt --lead-in-s 8"
+   $D --phase left        --phase-seconds 30   # left only; right lies still
+   $D --phase right       --phase-seconds 30   # right only; left lies still
+   $D --phase left_loss   --phase-seconds 20   # hold left in view 5 s, behind your back 7 s, back in view
+   $D --phase right_loss  --phase-seconds 20   # same with right
+   $D --phase headset_off --phase-seconds 20   # headset on 4 s, off and laid down 10 s, back on
+   ```
+   left/right phase, in this order: 10 s moving about 10 cm forward/back, left/right, up/down → grip fully
+   twice → trigger fully twice → X then Y (left) / B only (right).
+7. **Result:** each run ends `GATE 1 (LIVE phases <name>, …): PASS|FAIL`. Gate 1 = all five PASS.
+   Expected PASS lines: left 8 checks, right 7, each loss phase 1 ("stream stayed ≥ 30 Hz": the loss
+   itself is only reported, because a hidden controller is not detectable), headset_off 1 ("stream went
+   stale": the stop is the expected result).
 
-On FAIL:
-- `ts=0` and every pose zero: the headset is not connected (step 2), or another program reads the PICO.
-- `moved` too small: move further (10 cm or more). `swept` too small: release fully, then squeeze fully.
-- `stayed still` failed: the other controller was moving, or left and right are swapped. Report this.
-- `loss: no interval`: the controller was not hidden long enough. Note what the SDK did instead.
-- Rerun once. If it fails again, keep the `runs/` file and write it up (below).
+On FAIL: `moved` too small → move further; `swept` too small → open fully, squeeze fully; `stayed
+still` → the other controller moved or sides are swapped (report it); `no gap > 0.25 s` → Wi-Fi gap, rerun
+once. Re-score any file: `bash scripts/pico_env.sh python -m pico_teleop.diag_input --replay runs/<file>`.
 
-After every run: write a log (`log/log-NNN.md` plus a row in `log/log.md`) with the command, the git
-commit (`git log -1 --oneline`), the printed summary and the `runs/` path. Re-score later with
-`... python -m pico_teleop.diag_input --replay runs/diag-<time>.jsonl` (prints `REPLAY`).
+After the runs (checklist): gzip the passing files into `evidence/gate1/` · write the next
+`log/log-NNN.md` (command, `git log -1 --oneline`, the PASS lines, file names) · add its row to
+`log/log.md` · update the README status row. Sign-off for gate items: Suraj.
+
+## Axis-sign check without an arm (runbook go/no-go item 2)
+
+The sender in `--dry-run` creates **no socket at all** (nothing can reach 5701/5702) and skips the
+receiver-echo gate, so you can engage with no follower. Preflight anyway: `ss -tln | grep -E ':570[12]'`
+prints nothing, and no `run_teleop_remote_*` runs on any PC. Recenter facing the direction that will be
+"robot forward". Then, one arm at a time:
+```bash
+cd ~/projects/PICO-controller && bash scripts/pico_env.sh python -m pico_teleop.sender --dry-run --arms left
+```
+(no `--host`, no `--confirm…`). Squeeze the left grip and hold it; move the hand **10 cm**, hold still 2 s,
+read the once-per-second line `TCP moved x… y… z… cm` (robot frame: x forward, y left, z up; half scale):
+
+| Hand move (10 cm) | Expected on that line |
+|---|---|
+| forward (away from you) | x ≈ **+5**, y and z within ±1 |
+| left | y ≈ **+5**, x and z within ±1 |
+| up | z ≈ **+5**, x and y within ±1 |
+
+Release between moves (it re-anchors). Repeat with `--arms right`. Ctrl-C ends it. Any wrong sign or
+axis → stop and report; do not go near an arm. Log it like gate 1 (runbook item 2 → PASS, owner Suraj).
 
 ## Before any real-arm run (gate 5)
 

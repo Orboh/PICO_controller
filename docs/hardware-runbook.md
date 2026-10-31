@@ -8,7 +8,7 @@ Kento's request §8-9. If anything surprises anyone: **stop** (spotter card belo
 | # | Item | Pass condition | Owner |
 |---|---|---|---|
 | 1 | Gate 1 live | **PASS 2026-10-31** (log-007) | Suraj ✅ |
-| 2 | Axis signs, no arm | sender `--dry-run` with the headset: hand forward/left/up → TCP x+/y+/z+ in the printout (log it) | Suraj |
+| 2 | Axis signs, no arm | **PASS 2026-10-31** both arms (log-008) | Suraj ✅ |
 | 3 | Emergency stop | physically exists, location pointed at, pressed once with the arm off (protocol TODO#1) | Orboh member |
 | 4 | PSU switches | which switch = which arm, labelled; spotter can reach it (protocol §1) | Orboh member |
 | 5 | Arm and side | **left arm first** (right-arm zero/sign not checked on hardware) | Suraj + Kento |
@@ -31,6 +31,8 @@ Kento's request §8-9. If anything surprises anyone: **stop** (spotter card belo
   follower's startup move has ended and the arm is still).
 - **R2** After **any** sender restart (Ctrl-C, crash, method switch to the leader arm), **restart
   the follower too**, and wait for "ready". Otherwise the first packet (start pose) snaps the arm back.
+  And the other way round: if a follower was restarted, restart the sender. With two arms, a sender
+  restart sends BOTH arms their start pose: restart both followers (or run one sender per arm).
 - **R3** `--confirm-follower-at-start-pose` means: (a) R1/R2 were followed, (b) the pose-set names
   match (item 6), (c) the spotter compared the arm with the start-pose photo (within about 10°; it sags
   5-6° under gravity).
@@ -50,7 +52,7 @@ Kento's request §8-9. If anything surprises anyone: **stop** (spotter card belo
 ## Spotter card
 | You see | Do first | Then |
 |---|---|---|
-| arm moves when the grip is open, or jumps | **emergency stop** (or PSU off) | support the arm or keep clear: with power off it **drops** |
+| arm moves when the grip is open, or jumps (exception: the record 'a' key, which slowly returns the arm to the start pose by design; announce it before pressing) | **emergency stop** (or PSU off) | support the arm or keep clear: with power off it **drops** |
 | `FAULT` in the terminal | call "FAULT" (the arm is frozen, that is safe) | wearer opens the grip, hand back to the middle, squeeze again on your "ready" |
 | noise, shaking, sudden speed | call "release" | if it does not stop: emergency stop |
 | the sender crashed / closed | nothing moves (the receiver holds) | R2: restart the follower before starting the sender again |

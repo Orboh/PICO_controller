@@ -186,8 +186,10 @@ def test_sender_started_first_does_not_engage_before_the_receiver(tmp_path):
     assert engaged and all(r["arms"]["right"]["link"] == "ok" for r in engaged)
 
 
-def test_receiver_gone_stops_the_sender(tmp_path):
+def test_receiver_gone_link_down_but_still_holding(tmp_path):
     summary, rows, sent, stdout = _run(tmp_path, seconds=3.0)  # receiver quits mid-replay
-    events = [s["arms"]["right"]["event"] for s in sent if s["arms"]["right"]["event"]]
-    assert any("SENDING STOPPED" in e for e in events)
-    assert "every arm's link is down" in stdout
+    arm = [s["arms"]["right"] for s in sent]
+    i = next(k for k, a in enumerate(arm) if a["event"] and "LINK DOWN" in a["event"])
+    after = arm[i:]
+    assert len(after) > 10 and all(a["state"] != "ENGAGED" for a in after)
+    assert all(a["action"] == after[0]["action"] for a in after)  # the same HOLD target, still sent

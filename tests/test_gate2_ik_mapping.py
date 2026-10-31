@@ -41,6 +41,7 @@ def kin(request):
 
 
 def _arm(side, **cfg):
+    cfg.setdefault("engage_hold_s", 0.0)  # most tests check other things; the hold has its own test
     return ArmTeleop(side, ArmKinematics(side, limits_deg=FOLLOWER_LIMITS_DEG[side], margin_deg=2.0),
                      START[side], TeleopConfig(**cfg))
 
@@ -208,10 +209,48 @@ def test_trajectory_continuity_and_validation(side, shape):
         elif shape == "line":
             d = (0.0, 0.0, -0.2 * i / n)
         else:
-            d = (0.0, -0.3, 0.0) if i > 5 else (0, 0, 0)
+            d = (0.0, -0.25, 0.0) if i > 5 else (0, 0, 0)  # 0.3 m would trip the 15 cm lag FAULT
         out = arm.step(_h(_c(d, trig=1.0 - i / n)))
         assert out.state == ENGAGED, out.event
         v = val.check(out.action, prev, side)
         assert v.ok, v.reasons
         prev = out.action
     assert prev["gripper.pos"] < -50.0
+
+
+def test_grip_must_be_held_before_engaging():
+    arm = _arm("right", engage_hold_s=0.3)
+    arm.step(_h(_c(grip=0.0)))
+    for _ in range(2):  # a 40 ms accidental squeeze (trigger pulled the grip) does nothing
+        assert arm.step(_h(_c())).state == HOLD
+    arm.step(_h(_c(grip=0.0)))
+    states = [arm.step(_h(_c())).state for _ in range(16)]
+    assert states[13] == HOLD and states[14] == ENGAGED  # 15 steps x 20 ms = 0.3 s
+
+
+def test_hand_jump_faults():
+    """Hidden-controller return in the live data: ~50 cm in one 11-122 ms update (log-008)."""
+    arm = _engaged("right")
+    t = 0.0
+    for i in range(20):
+        t += 0.011
+        out = arm.step(ADAPT(_c((0.001 * i, 0, 0)), True, "", t))
+        assert out.state == ENGAGED
+    t += 0.122
+    out = arm.step(ADAPT(_c((0.5, 0, 0)), True, "", t))
+    assert out.state == FAULT and "hand jumped" in out.event
+
+
+def test_fast_but_real_hand_motion_does_not_fault():
+    arm = _engaged("right")
+    t = 0.0
+    for i in range(6):  # a short 2.0 m/s flick = the fastest held motion measured live
+        t += 0.011
+        out = arm.step(ADAPT(_c((0.0, 0.022 * i, 0.0)), True, "", t))
+    assert out.state == ENGAGED
+
+
+def test_target_lag_faults():
+    arm = _engaged("right")
+    out = arm.step(_h(_c((0.4, 0, 0))))  # desired TCP 20 cm away at once
+    assert out.state == FAULT and "ahead of the arm" in out.event

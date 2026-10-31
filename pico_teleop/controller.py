@@ -11,6 +11,7 @@ States (operator meaning in README "Controls")
             invalid grip or trigger value, IK unreachable, near singular, IK jump, posture change.
 "Armed": a clutch already held when the sender starts does not engage; a release must be seen on a
 VALID sample first (an all-zero SDK frame reads grip 0 and must not count as a release).
+Engaging needs the clutch held for `engage_hold_s` (0.3 s) on valid samples.
 """
 from __future__ import annotations
 
@@ -34,6 +35,12 @@ class TeleopConfig:
     scale: float = 0.5                 # hand metre -> TCP metre; start small
     clutch_on: float = 0.6             # grip >= this engages ...
     clutch_off: float = 0.4            # ... and < this releases (hysteresis: squeeze firmly, open fully)
+    engage_hold_s: float = 0.3         # grip must stay squeezed this long before ENGAGE (log-008:
+                                       # accidental grip while pulling the trigger lasts < 50 ms)
+    max_hand_speed_mps: float = 3.0    # input faster than this between device samples = tracking
+                                       # catch-up (live: held <= 2.0 m/s, hidden-controller return
+                                       # 4.2-42 m/s; log-008) -> FAULT
+    max_target_lag_m: float = 0.15     # desired TCP this far ahead of the rate-limited target -> FAULT
     gripper_open_deg: float = -60.0    # trigger released (lerobot gripper range is -65..0, 0 = closed)
     gripper_closed_deg: float = 0.0    # trigger fully pulled
     max_tcp_speed_mps: float = 0.25    # TCP target rate limit
@@ -62,6 +69,7 @@ class HandInput:
     clutch: float                # 0..1 (PICO: grip)
     gripper: float               # 0..1, 0 = open, 1 = closed (PICO: trigger)
     why_invalid: str = ""
+    t: float | None = None       # sample time on the DEVICE clock [s] (None: speed check skipped)
 
 
 class PicoAdapter:
@@ -70,7 +78,8 @@ class PicoAdapter:
     def __init__(self, operator_yaw_deg: float = 0.0):
         self.yaw = operator_yaw_deg
 
-    def __call__(self, c: ControllerSample, fresh: bool, why_stale: str = "input not fresh") -> HandInput:
+    def __call__(self, c: ControllerSample, fresh: bool, why_stale: str = "input not fresh",
+                 t_device: float | None = None) -> HandInput:
         ps = pose_status(c.pose)
         if not fresh:
             return HandInput(False, None, 0.0, 0.0, why_stale)
@@ -79,7 +88,7 @@ class PicoAdapter:
         if not (analog_ok(c.grip) and analog_ok(c.trigger)):
             return HandInput(False, None, 0.0, 0.0, f"grip/trigger out of range ({c.grip!r}, {c.trigger!r})")
         pos, _ = controller_in_robot(c.pose, self.yaw)
-        return HandInput(True, pos, min(max(c.grip, 0.0), 1.0), min(max(c.trigger, 0.0), 1.0))
+        return HandInput(True, pos, min(max(c.grip, 0.0), 1.0), min(max(c.trigger, 0.0), 1.0), t=t_device)
 
 
 @dataclass
@@ -111,6 +120,8 @@ class ArmTeleop:
         self.p_target: np.ndarray | None = None
         self.q_ik = self.q.copy()          # last IK answer; self.q (sent) trails it by the rate limit
         self.grip_synced = False
+        self.squeeze_steps = 0             # consecutive valid squeezed steps while HOLD (engage delay)
+        self.last_hand: tuple[float, np.ndarray] | None = None  # (device t, pos) for the speed check
         self.dt = 1.0 / self.cfg.hz
 
     # ------------------------------------------------------------------------------------
@@ -169,7 +180,13 @@ class ArmTeleop:
 
         if self.state == HOLD:
             if not (h.valid and self.armed and h.clutch >= cfg.clutch_on):
+                self.squeeze_steps = 0
                 return self._out()
+            self.squeeze_steps += 1
+            if self.squeeze_steps * self.dt < cfg.engage_hold_s - 1e-9:
+                return self._out()  # keep holding the grip: brief accidental squeezes do nothing
+            self.squeeze_steps = 0
+            self.last_hand = (h.t, h.pos.copy()) if h.t is not None else None
             self.anchor_hand = h.pos.copy()
             self.anchor_tcp = self.kin.fk(self.q).translation.copy()
             self.anchor_q = self.q.copy()
@@ -178,7 +195,21 @@ class ArmTeleop:
             self.state, self.grip_synced = ENGAGED, False
             return self._out("ENGAGED: anchored at the current target (no jump)")
 
-        # ENGAGED and valid: follow
+        # ENGAGED and valid: input sanity (a hidden controller "catches up" in one jump, log-008)
+        if h.t is not None:
+            if self.last_hand is not None and h.t > self.last_hand[0]:
+                speed = float(np.linalg.norm(h.pos - self.last_hand[1])) / (h.t - self.last_hand[0])
+                if speed > cfg.max_hand_speed_mps:
+                    return self._fault(f"hand jumped at {speed:.1f} m/s (> {cfg.max_hand_speed_mps}): "
+                                       "tracking catch-up? keep the controller in view")
+            if self.last_hand is None or h.t > self.last_hand[0]:
+                self.last_hand = (h.t, h.pos.copy())
+        p_des_check = self.anchor_tcp + cfg.scale * (h.pos - self.anchor_hand)
+        lag_m = float(np.linalg.norm(p_des_check - self.p_target))
+        if lag_m > cfg.max_target_lag_m:
+            return self._fault(f"hand is {lag_m * 100:.0f} cm ahead of the arm target "
+                               f"(> {cfg.max_target_lag_m * 100:.0f}): move slower")
+        # follow
         err, sigma = 0.0, math.nan
         lag = float(np.max(np.abs(np.rad2deg(self.q_ik - self.q))))
         if lag <= cfg.max_lag_deg:  # otherwise the target waits while the joints catch up
