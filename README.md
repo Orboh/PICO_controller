@@ -75,7 +75,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 60°) | release, squeeze again: it re-anchors and allows another 60°; if it repeats, stop |
 | `LOCKED: the same FAULT … 2x within 30 s` or `LOCKED: 3 FAULTs within 60 s` | repeated problems: engaging is locked for the rest of this sender run | **stop**: release, `esc` the follower, then restart follower and sender (R2) |
 | `joint_N would come within … deg of its limit` | the move would bring a joint within 3° of its limit (moving away is allowed). The left start pose has joint_1/joint_2 only ~12° from their limits, so leftward moves on the left arm hit this early | move back the other way; release, "ready", squeeze |
-| `joint_N would be … deg from the session start pose` / `engage refused: the arm is … from the session start pose` | the arm would get more than 60° (any joint) from where this session started; stops slow creep into the corners over many squeezes | bring the hand back toward where you started; if refused: `esc` and restart (R2) |
+| `joint_N would be … deg from the session start pose` / `engage refused: the arm is … from the session start pose` | the arm would get more than 90° (any joint) from where this session started; stops slow creep into the corners over many squeezes | bring the hand back toward where you started; if refused: `esc` and restart (R2) |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
 
 The sender prints the state of each arm once per second and every event as it happens.
