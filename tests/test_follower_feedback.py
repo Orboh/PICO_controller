@@ -154,3 +154,30 @@ def test_fault_cleared_by_release_while_link_down():
     assert ch.arm.state == "FAULT"
     _, ev = _tick(ch, 0.0, 3)
     assert ch.arm.state == HOLD and "fault cleared" in ev
+
+
+def test_facing_away_refuses_engage_and_faults():
+    """Operator turned ~100 deg (live, log-016): hand motion would map to the wrong robot axes."""
+    ch = _ch(0.0)
+    c0 = ControllerSample((0.2, 1.0, -0.4) + ID, 0.0, 1.0)
+    ch.tick(c0, True, "ok/ok", time.monotonic(), None, 5.0)
+    _, ev = ch.tick(ControllerSample((0.2, 1.0 + 1e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, -100.0)
+    assert ch.arm.state == HOLD and "face forward" in ev
+    ch.tick(ControllerSample((0.2, 1.0 + 2e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, 3.0)
+    assert ch.arm.state == ENGAGED
+    ch.tick(ControllerSample((0.2, 1.0 + 3e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, 45.0)
+    assert ch.arm.state == "FAULT"
+
+
+def test_headset_facing_from_live_recordings():
+    import json, os
+    from pico_teleop.sender import headset_facing_deg
+    base = os.path.join(os.path.dirname(__file__), "..", "runs")
+    for fn, expect in [("ori-dry-left-1-twist.jsonl", -100), ("axis-both-left-20261031.jsonl", 0)]:
+        path = os.path.join(base, fn)
+        if not os.path.exists(path):
+            continue
+        rows = [json.loads(l) for l in open(path)][1:]
+        yaws = [headset_facing_deg(r["frame"]["headset"]) for r in rows]
+        yaws = [y for y in yaws if y is not None]
+        assert abs(sorted(yaws)[len(yaws) // 2] - expect) < 10

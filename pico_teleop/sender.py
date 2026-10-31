@@ -32,7 +32,16 @@ from .controller import ENGAGED, HOLD, ArmTeleop, PicoAdapter, TeleopConfig
 from .kinematics import DEFAULT_TCP_OFFSET_M, DEFAULT_URDF, ArmKinematics
 from .poses import POSE_SETS, current_pose_set, load_start_pose, pose_file, pose_file_sha
 from .validate import ECHO_PORTS, FOLLOWER_LIMITS_DEG, PORTS, ActionValidator, ValidatorConfig
-from .xr_input import FreshnessTracker, ReplaySource, SdkSource
+from .frames import R_ROBOT_FROM_XR, quat_xyzw_to_mat
+from .xr_input import FreshnessTracker, ReplaySource, SdkSource, pose_status
+
+def headset_facing_deg(headset_pose) -> float | None:
+    """Headset forward (-z) in the robot frame -> yaw from robot +x in degrees (+ = left); None if no pose."""
+    if pose_status(headset_pose) != "ok":
+        return None
+    f = R_ROBOT_FROM_XR @ (-quat_xyzw_to_mat(headset_pose[3:])[:, 2])
+    return float(np.degrees(np.arctan2(f[1], f[0])))
+
 
 def _finite(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
@@ -116,7 +125,7 @@ class ArmChannel:
 
     def __init__(self, side: str, start: dict, cfg: TeleopConfig, link: Link | None, urdf: str,
                  link_timeout_s: float, tcp_offset_m: float, max_track_err_deg: float = 8.0,
-                 max_link_pause_s: float = 5.0):
+                 max_link_pause_s: float = 5.0, max_facing_deg: float = 30.0):
         self.side, self.link, self.link_timeout_s = side, link, link_timeout_s
         self.max_track_err_deg = max_track_err_deg  # safety protocol §1 L0: |measured - commanded| > 8 deg
         # Keep sending the HOLD target through a receiver pause (episode save) only this long. After
@@ -124,6 +133,9 @@ class ArmChannel:
         # no step check (Elephant m5 #1). 5 s is a guess until record pauses are measured on the
         # follower PC; the real fix is a receiver instance id in the echo (proposal patch).
         self.max_link_pause_s = max_link_pause_s
+        # The XR "forward" is fixed at recenter; an operator turned away maps hand motion onto the wrong
+        # robot axes (2026-10-31: headset at -100 deg turned a twist into a tilt, log-016).
+        self.max_facing_deg = max_facing_deg
         self.stopped = False
         self.foreign = False          # latched: another sender's echoes were seen on this port
         kin = ArmKinematics(side, urdf, limits_deg=FOLLOWER_LIMITS_DEG[side], margin_deg=cfg.joint_margin_deg,
@@ -178,7 +190,7 @@ class ArmChannel:
         return "soft_move_to: moving the HOLD target to the requested pose"
 
     def tick(self, ctrl, fresh: bool, stream_state: str, now: float,
-             t_device: float | None = None) -> tuple[dict, str | None]:
+             t_device: float | None = None, facing_deg: float | None = None) -> tuple[dict, str | None]:
         """One cycle: always sends one validated packet (the HOLD target when nothing may move).
 
         A silent receiver (> link_timeout_s without echo) = FAULT + no engagement, but we keep
@@ -224,6 +236,9 @@ class ArmChannel:
                    "lost": "link down: no echo from the receiver"}.get(ls, f"input {stream_state}")
             if self.foreign:
                 why = "another sender on this port (locked until restart)"
+            if ok and facing_deg is not None and abs(facing_deg) > self.max_facing_deg:
+                ok, why = False, (f"operator faces {facing_deg:+.0f} deg from the robot's forward "
+                                  f"(> {self.max_facing_deg:.0f}): face forward or recenter the headset")
             if not ok:  # following is not allowed, but a FAULT may still be cleared by a real release
                 cleared = self.arm.clear_fault_on_release(self.adapter(ctrl, fresh, why, t_device))
                 event = " | ".join(e for e in (event, cleared) if e) or None
@@ -268,6 +283,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--link-timeout-s", type=float, default=1.0)
     ap.add_argument("--stale-s", type=float, default=0.4,
                     help="input older than this = stale (FAULT while engaged); 0.4 s from live PICO data")
+    ap.add_argument("--max-facing-deg", type=float, default=30.0,
+                    help="refuse/FAULT when the headset faces further than this from the robot's forward")
     ap.add_argument("--max-link-pause-s", type=float, default=5.0,
                     help="after this long without echo, stop sending for good (runbook R2)")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
@@ -301,7 +318,7 @@ def main(argv=None) -> int:
         link = None if a.dry_run else Link(a.host, PORTS[s] + a.port_offset, ECHO_PORTS[s] + a.port_offset)
         start = load_start_pose(s, pose_set, a.pose_sets_dir)
         chans.append(ArmChannel(s, start, cfg, link, a.urdf, a.link_timeout_s, a.tcp_offset_m,
-                                max_link_pause_s=a.max_link_pause_s))
+                                max_link_pause_s=a.max_link_pause_s, max_facing_deg=a.max_facing_deg))
         ch = chans[-1]
         print(f"[sender] {s}: tcp://{a.host}:{PORTS[s] + a.port_offset} (echo {ECHO_PORTS[s] + a.port_offset}), "
               f"start pose {pose_file(s, pose_set, a.pose_sets_dir)} sha256 {pose_file_sha(s, pose_set, a.pose_sets_dir)} "
@@ -331,7 +348,8 @@ def main(argv=None) -> int:
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
             for ch in chans:
                 act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}",
-                                  t0, fr.t_device_ns / 1e9 if fr.t_device_ns else None)
+                                  t0, fr.t_device_ns / 1e9 if fr.t_device_ns else None,
+                                  headset_facing_deg(fr.headset))
                 rec["arms"][ch.side] = {"state": "STOPPED" if ch.stopped else ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
                                         "follower": ch.link.follower if ch.link else None}
@@ -351,6 +369,8 @@ def main(argv=None) -> int:
                         w = np.degrees(pin.log3(ch.arm.kin.fk(ch.arm.q).rotation @ ch.arm.anchor_tcp_rot.T))
                         rot = f" rot x{w[0]:+5.0f} y{w[1]:+5.0f} z{w[2]:+5.0f} deg"
                     lk = "SENDING STOPPED " if ch.stopped else ("LINK DOWN " if ch.link_down else "")
+                    fy = headset_facing_deg(fr.headset)
+                    lk += f"facing {fy:+.0f}deg " if fy is not None else ""
                     print(f"[{ch.side:5s}] {lk}{ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
                           f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm{rot}", flush=True)
             if chans and all(ch.stopped for ch in chans):
