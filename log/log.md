@@ -20,3 +20,4 @@ Rules for this folder:
 | [log-010.md](log-010.md) | Gate 5: go/no-go signed; two supervised left-arm sessions (operators Suraj and Kota-san); directions confirmed on the real arm; all FAULTs behaved as designed; tuning findings (Wi-Fi, 45° posture limit, gripper takeover). |
 | [log-011.md](log-011.md) | Reviews of the arm sessions: deviations listed (not clean checks), periodic 15 s stalls + PC Wi-Fi power save, runbook rewrite (daily go/no-go, R1-R4, esc after release), posture limit 60°, gripper options. |
 | [log-012.md](log-012.md) | Gripper gentle sync (30°/s until the trigger matches, then 120°/s) replaces the soft takeover; options compared; 72 tests; −60° still to measure on the arm. |
+| [log-013.md](log-013.md) | Periodic 15 s input stalls: PC Wi-Fi power save turned off (not the cause), link pings fine → headset/app side; stale limit 0.25 → 0.4 s (`--stale-s`), replay of session 2: 2 → 0 stale FAULTs; 72 tests. |

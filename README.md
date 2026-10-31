@@ -50,7 +50,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 
 | Message in the terminal | Plain meaning | What to do |
 |---|---|---|
-| `input stale` / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
+| `input stale` (> 0.4 s without new PICO data) / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
 | `target unreachable` | the hand asked for a point the arm cannot reach | release, bring the hand back toward you, squeeze |
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |

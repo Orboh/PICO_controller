@@ -261,6 +261,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--scale", type=float, default=0.5)
     ap.add_argument("--port-offset", type=int, default=0, help="tests only: shift 5701/5711 etc.")
     ap.add_argument("--link-timeout-s", type=float, default=1.0)
+    ap.add_argument("--stale-s", type=float, default=0.4,
+                    help="input older than this = stale (FAULT while engaged); 0.4 s from live PICO data")
     ap.add_argument("--max-link-pause-s", type=float, default=5.0,
                     help="after this long without echo, stop sending for good (runbook R2)")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
@@ -301,10 +303,10 @@ def main(argv=None) -> int:
               "(compare with the follower PC: sha256sum of its CURRENT set's file), limits (deg, margin incl.) "
               f"{ {k: tuple(round(x, 1) for x in v) for k, v in ch.val.limits.items()} }", flush=True)
     src = ReplaySource(a.replay) if a.replay else SdkSource()
-    # 0.25 s, from live input gaps (log-007/008): ~1 % of PICO updates arrive > 100 ms apart; 0.25 s
-    # bounds how long the arm may keep moving on frozen input (<= 0.25 m/s * 0.25 s = 6 cm of TCP).
-    # Not the same quantity as the receiver's 250 ms (sender->receiver packets). diag uses 0.1 s.
-    tr = FreshnessTracker(stale_s=0.25)
+    # 0.4 s (Suraj, 2026-10-31, log-013): the PICO stalls 0.22-0.33 s about every 15 s (headset/app
+    # side; the link itself pings fine). While input is stale the target does not advance; when data
+    # returns, the 10 cm one-update hand-step FAULT and the rate limits catch any jump. diag uses 0.1 s.
+    tr = FreshnessTracker(stale_s=a.stale_s)
     log_path = a.log or time.strftime("runs/sender-%Y%m%d-%H%M%S.jsonl")
     os.makedirs(os.path.dirname(os.path.abspath(log_path)), exist_ok=True)
     log = open(log_path, "w")
