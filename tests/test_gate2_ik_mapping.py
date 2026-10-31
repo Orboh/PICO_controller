@@ -254,3 +254,23 @@ def test_target_lag_faults():
     arm = _engaged("right")
     out = arm.step(_h(_c((0.4, 0, 0))))  # desired TCP 20 cm away at once
     assert out.state == FAULT and "ahead of the arm" in out.event
+
+
+def test_catch_up_after_short_gap_faults_by_step_size():
+    """Elephant m5 #3: 52 cm after a 0.2 s gap is only 2.6 m/s, but no hand moves 10 cm in one update."""
+    arm = _engaged("right")
+    t = 0.0
+    for i in range(10):
+        t += 0.011
+        arm.step(ADAPT(_c((0.001 * i, 0, 0)), True, "", t))
+    out = arm.step(ADAPT(_c((0.2, 0, 0)), True, "", t + 0.2))
+    assert out.state == FAULT and "in one update" in out.event
+
+
+def test_grip_hold_uses_device_time():
+    """A spike held on a stalled sample must not count as 0.3 s of squeeze."""
+    arm = _arm("right", engage_hold_s=0.3)
+    arm.step(ADAPT(_c(grip=0.0), True, "", 1.0))
+    for _ in range(20):  # 20 sender ticks, but the device clock does not advance
+        assert arm.step(ADAPT(_c(), True, "", 1.011)).state == HOLD
+    assert arm.step(ADAPT(_c(), True, "", 1.32)).state == ENGAGED

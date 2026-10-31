@@ -14,11 +14,11 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | Gate | State | Still needed before hardware |
 |---|---|---|
 | 1 input-only diagnostic | **PASS live** 2026-10-31, all 5 phases (log-007, `evidence/gate1`) | — (finding: a hidden controller is not detectable) |
-| 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | live check of axis signs; measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
+| 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
 | 3 fake receiver | done offline (real receiver class, localhost) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
-| 5 hardware | **blocked** | follower-pose feedback for the anchor (log-006); safety protocol prerequisites (below); right-arm zero/sign check |
+| 5 hardware | **blocked** | follower-pose feedback (patch) **or** Kento accepts rules R1-R3 in writing (runbook item 7); safety protocol prerequisites (below); right-arm zero/sign check |
 
 Nothing in this repository has moved an arm.
 
@@ -29,23 +29,24 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 
 | Input | Effect | When |
 |---|---|---|
-| **Grip, squeeze and keep holding** | after **0.3 s** of holding: ENGAGE, the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. A short accidental squeeze (e.g. while pulling the trigger) does nothing. | only from HOLD, and only after the grip was seen open once since start (grip already held at start = nothing happens) |
-| **Grip, open fully (< 0.4)** | HOLD: the arm stops at the last sent target and stays there. Your hand can move freely. | ENGAGED |
+| **Grip, squeeze and keep holding** | after **0.3 s** of holding (the terminal prints `ENGAGED`): ENGAGE, the arm follows your hand's *motion* from where it is now, at half scale. The arm does not jump to your hand. A short accidental squeeze (e.g. while pulling the trigger) does nothing. | only from HOLD, only with the link up (not waiting/LINK DOWN), and only after the grip was seen open once since start (grip already held at start = nothing happens) |
+| **Grip, open fully (< 0.4)** | HOLD: no new targets are sent; the arm finishes the last small step (≤ 0.9° per joint, one 20 ms cycle) and stays there. Settling on the real arm: to be measured in the first 2 cm test. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-60°), fully pulled = closed (0°). **Soft takeover:** after each engage the gripper does not move until the trigger "meets" its current opening (within 3°): e.g. after start the gripper is closed, so pull the trigger fully first, then let go to open. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
 | A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
-| **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). | always |
+| **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). Before starting the sender again: restart the follower (runbook R2). | always |
 
 **There is no stop button on the controllers.** To stop the arm moving: open the grip. To stop
 everything: the spotter presses the emergency stop / switches off the arm PSU (safety protocol §1).
 
 **Keep both controllers in front of you while engaged; open the grip before a hand leaves the view.**
-A hidden controller is NOT detected: its reported position just stays put, then catches up when it
-is seen again (log-007), and the arm follows that catch-up (speed-limited).
+A hidden controller is not flagged by the PICO (its position just stays put). When it is seen again it
+jumps: the sender FAULTs on jumps faster than 3 m/s, and on a desired TCP more than 15 cm ahead of the
+arm target. A slower drift below both limits would be followed (speed-limited); not measured live.
 
 **FAULT:** the arm freezes and ignores your hand. You cannot see this inside the headset (no
 vibration or sound yet), so **the spotter watches the sender terminal and calls out "FAULT"**.
-To recover: open the grip fully, move your hand back toward the middle, squeeze again.
+To recover: open the grip fully, bring the hand back to where it was when you engaged (or closer to your body), hold the grip 0.3 s again. If the same FAULT repeats: stop and report.
 
 | Message in the terminal | Plain meaning | What to do |
 |---|---|---|
@@ -54,10 +55,10 @@ To recover: open the grip fully, move your hand back toward the middle, squeeze 
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
-| `hand is … cm ahead of the arm target` | you moved faster than the arm may follow (TCP ≤ 0.25 m/s) | release, move slower, squeeze |
-| `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose | wait for `link back`, then release and squeeze. If the follower was restarted: restart the sender too (runbook R2) |
-| `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | stop the session; only one sender per arm |
-| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 45°) | release, squeeze again: it re-anchors and allows another 45° |
+| `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
+| `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose | wait for `link back`, then release and squeeze. **If the follower may be restarting: Ctrl-C the sender FIRST** (its held pose would become the restarted follower's first target), then follow R2. If the follower was restarted: restart the sender too (runbook R2) |
+| `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
+| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 45°) | release, squeeze again: it re-anchors and allows another 45°; if it repeats, stop |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
 
 The sender prints the state of each arm once per second and every event as it happens.
@@ -147,7 +148,10 @@ read the once-per-second line `TCP moved x… y… z… cm` (robot frame: x forw
 | left | y ≈ **+5**, x and z within ±1 |
 | up | z ≈ **+5**, x and y within ±1 |
 
-Release between moves (it re-anchors). Repeat with `--arms right`. Ctrl-C ends it. Any wrong sign or
+Release between moves (it re-anchors) and **release before bringing the hand back**. Repeat with
+`--arms right`. Left/right words are easy to confuse: if a sign looks wrong, check the geometry first
+(hold both controllers in front of you: the right one must read at XR +x of the left one, log-008) and
+**never change the `frames.py` matrix from a left/right report alone**. Ctrl-C ends it. Any wrong sign or
 axis → stop and report; do not go near an arm. Log it like gate 1 (runbook item 2 → PASS, owner Suraj).
 
 ## Before any real-arm run (gate 5)

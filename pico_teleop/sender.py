@@ -112,9 +112,17 @@ class ArmChannel:
     """Controller + validator + link for one arm. The validator sees every packet before it leaves."""
 
     def __init__(self, side: str, start: dict, cfg: TeleopConfig, link: Link | None, urdf: str,
-                 link_timeout_s: float, tcp_offset_m: float, max_track_err_deg: float = 8.0):
+                 link_timeout_s: float, tcp_offset_m: float, max_track_err_deg: float = 8.0,
+                 max_link_pause_s: float = 5.0):
         self.side, self.link, self.link_timeout_s = side, link, link_timeout_s
         self.max_track_err_deg = max_track_err_deg  # safety protocol §1 L0: |measured - commanded| > 8 deg
+        # Keep sending the HOLD target through a receiver pause (episode save) only this long. After
+        # that, stop for good: a restarted receiver would take our held pose as its first target with
+        # no step check (Elephant m5 #1). 5 s is a guess until record pauses are measured on the
+        # follower PC; the real fix is a receiver instance id in the echo (proposal patch).
+        self.max_link_pause_s = max_link_pause_s
+        self.stopped = False
+        self.foreign = False          # latched: another sender's echoes were seen on this port
         kin = ArmKinematics(side, urdf, limits_deg=FOLLOWER_LIMITS_DEG[side], margin_deg=cfg.joint_margin_deg,
                             tcp_offset_m=tcp_offset_m)
         self.arm = ArmTeleop(side, kin, start, cfg)
@@ -180,13 +188,22 @@ class ArmChannel:
         if self.link is not None:
             nf = self.link.foreign_echo
             cmd = self.link.poll(self.link_timeout_s)
-            if self.link.foreign_echo > nf:
-                event = self.arm.force_fault("echo of packets we did not send: another sender on this "
-                                             "port? (never run leader_agent and PICO on one arm)").event
+            if self.link.foreign_echo > nf and not self.foreign:
+                self.foreign = True
+                event = (self.arm.force_fault("foreign echo").event or "") + " | echo of packets we did not " \
+                    "send: ANOTHER SENDER on this port. Engaging is locked until restart (spotter: e-stop)"
             if cmd is not None and cmd.get("cmd_id") != self.last_move_id:
-                self.last_move_id = cmd.get("cmd_id")
                 event = self._accept_move(cmd, now)
+                if event.startswith("soft_move_to: moving"):
+                    self.last_move_id = cmd.get("cmd_id")  # only an ACCEPTED request is deduplicated
+                    self.arm.reset_squeeze()
         ls = self.link_state(now)
+        if self.stopped:
+            return None, None
+        if ls == "lost" and self.link.last_echo_t is not None and now - self.link.last_echo_t > self.max_link_pause_s:
+            self.stopped = True
+            return None, (f"link down > {self.max_link_pause_s:.0f} s: SENDING STOPPED (a restarted follower "
+                          "must not get our held pose). Restart the follower, then the sender (runbook R2)")
         if ls == "lost" and not self.link_down:
             self.link_down = True
             event = (self.arm.force_fault("link lost: no echo from the receiver").event or "") + \
@@ -199,9 +216,14 @@ class ArmChannel:
             if self.arm.move_toward(self.move, max_dps=self.arm.cfg.max_joint_speed_dps):
                 event, self.move = "soft_move_to: arrived at the requested pose", None
         else:
-            ok = ls in ("ok", "dry")
+            ok = ls in ("ok", "dry") and not self.foreign
             why = {"waiting": "waiting for the receiver (no echo yet: follower not ready)",
                    "lost": "link down: no echo from the receiver"}.get(ls, f"input {stream_state}")
+            if self.foreign:
+                why = "another sender on this port (locked until restart)"
+            if not ok:  # following is not allowed, but a FAULT may still be cleared by a real release
+                cleared = self.arm.clear_fault_on_release(self.adapter(ctrl, fresh, why, t_device))
+                event = " | ".join(e for e in (event, cleared) if e) or None
             fe = self.follower_error(now)
             if fe is not None and fe[0] > self.max_track_err_deg:
                 ok, why = False, f"follower {fe[1]} is {fe[0]:.1f} deg from the command (> {self.max_track_err_deg})"
@@ -239,6 +261,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--scale", type=float, default=0.5)
     ap.add_argument("--port-offset", type=int, default=0, help="tests only: shift 5701/5711 etc.")
     ap.add_argument("--link-timeout-s", type=float, default=1.0)
+    ap.add_argument("--max-link-pause-s", type=float, default=5.0,
+                    help="after this long without echo, stop sending for good (runbook R2)")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
     ap.add_argument("--replay", default=None, help="drive from a gate-1 recording instead of the PICO")
     ap.add_argument("--duration-s", type=float, default=None)
@@ -269,7 +293,8 @@ def main(argv=None) -> int:
     for s in sides:
         link = None if a.dry_run else Link(a.host, PORTS[s] + a.port_offset, ECHO_PORTS[s] + a.port_offset)
         start = load_start_pose(s, pose_set, a.pose_sets_dir)
-        chans.append(ArmChannel(s, start, cfg, link, a.urdf, a.link_timeout_s, a.tcp_offset_m))
+        chans.append(ArmChannel(s, start, cfg, link, a.urdf, a.link_timeout_s, a.tcp_offset_m,
+                                max_link_pause_s=a.max_link_pause_s))
         ch = chans[-1]
         print(f"[sender] {s}: tcp://{a.host}:{PORTS[s] + a.port_offset} (echo {ECHO_PORTS[s] + a.port_offset}), "
               f"start pose {pose_file(s, pose_set, a.pose_sets_dir)} sha256 {pose_file_sha(s, pose_set, a.pose_sets_dir)} "
@@ -299,7 +324,7 @@ def main(argv=None) -> int:
             for ch in chans:
                 act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}",
                                   t0, fr.t_device_ns / 1e9 if fr.t_device_ns else None)
-                rec["arms"][ch.side] = {"state": ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
+                rec["arms"][ch.side] = {"state": "STOPPED" if ch.stopped else ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
                                         "follower": ch.link.follower if ch.link else None}
                 if ev:
@@ -312,9 +337,12 @@ def main(argv=None) -> int:
                     # TCP motion since engage, robot frame (x fwd, y left, z up): the axis-sign check
                     tcp = ch.arm.kin.fk(ch.arm.q).translation
                     d = (tcp - ch.arm.anchor_tcp) * 100 if ch.arm.anchor_tcp is not None else tcp * 0
-                    lk = "LINK DOWN " if ch.link_down else ""
+                    lk = "SENDING STOPPED " if ch.stopped else ("LINK DOWN " if ch.link_down else "")
                     print(f"[{ch.side:5s}] {lk}{ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
                           f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm", flush=True)
+            if chans and all(ch.stopped for ch in chans):
+                print("[sender] sending stopped on every arm: exiting", flush=True)
+                break
             if a.replay and src.exhausted:
                 break
             time.sleep(max(period - (time.monotonic() - t0), 0.0))

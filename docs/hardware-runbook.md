@@ -8,13 +8,13 @@ Kento's request §8-9. If anything surprises anyone: **stop** (spotter card belo
 | # | Item | Pass condition | Owner |
 |---|---|---|---|
 | 1 | Gate 1 live | **PASS 2026-10-31** (log-007) | Suraj ✅ |
-| 2 | Axis signs, no arm | **PASS 2026-10-31** both arms (log-008) | Suraj ✅ |
-| 3 | Emergency stop | physically exists, location pointed at, pressed once with the arm off (protocol TODO#1) | Orboh member |
-| 4 | PSU switches | which switch = which arm, labelled; spotter can reach it (protocol §1) | Orboh member |
+| 2 | Axis signs, no arm | **PASS 2026-10-31** both arms (log-008); redo the left-controller "left" row cleanly first | Suraj ✅ |
+| 3 | Emergency stop | physically exists, location pointed at, pressed once with the arm off (protocol TODO#1) | Orboh member (name: ______) |
+| 4 | PSU switches | which switch = which arm, labelled; spotter can reach it (protocol §1) | Orboh member (name: ______) |
 | 5 | Arm and side | **left arm first** (right-arm zero/sign not checked on hardware) | Suraj + Kento |
 | 6 | Start pose | the follower PC's `config/pose_sets/CURRENT` name = sender `--pose-set` (printed by both) | Suraj |
 | 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied on the follower PC **or** Kento accepts operating rule R1-R3 below in writing | Kento |
-| 8 | Standing mark | tape on the floor outside the arm's reach for the PICO wearer | Orboh member |
+| 8 | Standing mark | tape on the floor outside the arm's reach for the PICO wearer | Orboh member (name: ______) |
 | 9 | Grasp point | `--tcp-offset-m` measured (ruler: link7 flange → between fingertips) or 0.1025 accepted | Suraj |
 
 ## Roles and hosts
@@ -56,5 +56,7 @@ Kento's request §8-9. If anything surprises anyone: **stop** (spotter card belo
 | `FAULT` in the terminal | call "FAULT" (the arm is frozen, that is safe) | wearer opens the grip, hand back to the middle, squeeze again on your "ready" |
 | noise, shaking, sudden speed | call "release" | if it does not stop: emergency stop |
 | the sender crashed / closed | nothing moves (the receiver holds) | R2: restart the follower before starting the sender again |
+| `LINK DOWN` and the follower is being restarted | **Ctrl-C the sender first** | its held pose would be the new follower's first target (R2) |
+| `echo of packets we did not send` | **emergency stop** | another sender drives this arm; find and stop it |
 | the wearer's hand leaves the headset's view while engaged | call "release" | a hidden controller is not detected (log-007) |
 | anything unexpected | stop the session | log it (`log/log-NNN.md`) before resuming |

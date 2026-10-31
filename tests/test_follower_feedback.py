@@ -18,6 +18,8 @@ class StubLink:
         self.cmd, self.silent, self.rtt_ms = None, False, None
 
     def poll(self, gap_s):
+        self.foreign_echo += getattr(self, "foreign_next", 0)
+        self.foreign_next = 0
         if not self.silent:
             self.last_echo_t = time.monotonic()
         cmd, self.cmd = self.cmd, None
@@ -119,3 +121,36 @@ def test_soft_move_only_in_hold_and_checked():
     assert ch.move is not None
     events = [_tick(ch, 0.0, 6 + i)[1] for i in range(20)]
     assert any(e and "arrived" in e for e in events)
+
+
+def test_long_link_pause_stops_sending_for_good():
+    """Elephant m5 #1: a restarted receiver must not get our held pose as its first target."""
+    ch = _ch(0.0)
+    _tick(ch, 0.0, 0)
+    ch.link.silent, ch.link.last_echo_t = True, time.monotonic() - 6.0
+    act, ev = _tick(ch, 0.0, 1)
+    assert act is None and "SENDING STOPPED" in ev
+    n = len(ch.link.sent)
+    ch.link.silent = False  # echoes come back: still stopped
+    assert _tick(ch, 1.0, 2) == (None, None) and len(ch.link.sent) == n
+
+
+def test_foreign_echo_locks_engaging():
+    ch = _ch(0.0)
+    _tick(ch, 0.0, 0)
+    ch.link.foreign_next = 1  # the next poll sees an echo of a packet we never sent
+    _, ev = _tick(ch, 0.0, 1)
+    assert "ANOTHER SENDER" in ev
+    _tick(ch, 1.0, 2)
+    assert ch.arm.state == HOLD and ch.foreign
+
+
+def test_fault_cleared_by_release_while_link_down():
+    """Elephant m5 #2: otherwise the record 'a' key could never run after an episode ended engaged."""
+    ch = _ch(0.0)
+    _tick(ch, 0.0, 0); _tick(ch, 1.0, 1)
+    ch.link.silent, ch.link.last_echo_t = True, time.monotonic() - 2.0
+    _tick(ch, 1.0, 2)
+    assert ch.arm.state == "FAULT"
+    _, ev = _tick(ch, 0.0, 3)
+    assert ch.arm.state == HOLD and "fault cleared" in ev

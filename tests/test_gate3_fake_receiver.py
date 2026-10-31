@@ -190,6 +190,6 @@ def test_receiver_gone_link_down_but_still_holding(tmp_path):
     summary, rows, sent, stdout = _run(tmp_path, seconds=3.0)  # receiver quits mid-replay
     arm = [s["arms"]["right"] for s in sent]
     i = next(k for k, a in enumerate(arm) if a["event"] and "LINK DOWN" in a["event"])
-    after = arm[i:]
+    after = [a for a in arm[i:] if a["action"] is not None]  # None = sending stopped (> 5 s down)
     assert len(after) > 10 and all(a["state"] != "ENGAGED" for a in after)
     assert all(a["action"] == after[0]["action"] for a in after)  # the same HOLD target, still sent

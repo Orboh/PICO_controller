@@ -41,6 +41,8 @@ class TeleopConfig:
                                        # catch-up (live: held <= 2.0 m/s, hidden-controller return
                                        # 4.2-42 m/s; log-008) -> FAULT
     max_target_lag_m: float = 0.15     # desired TCP this far ahead of the rate-limited target -> FAULT
+    max_hand_step_m: float = 0.10      # hand moved this far in ONE device update -> FAULT, whatever the
+                                       # dt (a catch-up after a short gap can stay under the speed limit)
     gripper_open_deg: float = -60.0    # trigger released (lerobot gripper range is -65..0, 0 = closed)
     gripper_closed_deg: float = 0.0    # trigger fully pulled
     max_tcp_speed_mps: float = 0.25    # TCP target rate limit
@@ -121,6 +123,7 @@ class ArmTeleop:
         self.q_ik = self.q.copy()          # last IK answer; self.q (sent) trails it by the rate limit
         self.grip_synced = False
         self.squeeze_steps = 0             # consecutive valid squeezed steps while HOLD (engage delay)
+        self.squeeze_t0: float | None = None  # device time the current squeeze started
         self.last_hand: tuple[float, np.ndarray] | None = None  # (device t, pos) for the speed check
         self.dt = 1.0 / self.cfg.hz
 
@@ -157,6 +160,17 @@ class ArmTeleop:
         self.gripper += float(np.clip(g_t - self.gripper, -max_dps * self.dt, max_dps * self.dt))
         return bool(np.max(np.abs(np.rad2deg(q_t - self.q))) < 0.5 and abs(g_t - self.gripper) < 0.5)
 
+    def reset_squeeze(self) -> None:
+        self.squeeze_steps, self.squeeze_t0 = 0, None
+
+    def clear_fault_on_release(self, h: HandInput) -> str | None:
+        """FAULT -> HOLD on a valid open grip even when following is not allowed (e.g. link down).
+        Safe: HOLD sends the same target as FAULT."""
+        if self.state == FAULT and h.valid and h.clutch < self.cfg.clutch_off:
+            self.state, self.armed = HOLD, True
+            return "fault cleared by grip release (HOLD)"
+        return None
+
     def force_fault(self, why: str) -> StepOut:
         """For faults found outside this class (validator, link)."""
         return self._fault(why) if self.state == ENGAGED else self._out()
@@ -180,12 +194,16 @@ class ArmTeleop:
 
         if self.state == HOLD:
             if not (h.valid and self.armed and h.clutch >= cfg.clutch_on):
-                self.squeeze_steps = 0
+                self.reset_squeeze()
                 return self._out()
+            # Hold time on the DEVICE clock when known (a stalled sample must not count), else ticks.
             self.squeeze_steps += 1
-            if self.squeeze_steps * self.dt < cfg.engage_hold_s - 1e-9:
+            if h.t is not None and self.squeeze_t0 is None:
+                self.squeeze_t0 = h.t
+            held = (h.t - self.squeeze_t0) if h.t is not None else self.squeeze_steps * self.dt
+            if held < cfg.engage_hold_s - 1e-9:
                 return self._out()  # keep holding the grip: brief accidental squeezes do nothing
-            self.squeeze_steps = 0
+            self.reset_squeeze()
             self.last_hand = (h.t, h.pos.copy()) if h.t is not None else None
             self.anchor_hand = h.pos.copy()
             self.anchor_tcp = self.kin.fk(self.q).translation.copy()
@@ -198,7 +216,11 @@ class ArmTeleop:
         # ENGAGED and valid: input sanity (a hidden controller "catches up" in one jump, log-008)
         if h.t is not None:
             if self.last_hand is not None and h.t > self.last_hand[0]:
-                speed = float(np.linalg.norm(h.pos - self.last_hand[1])) / (h.t - self.last_hand[0])
+                step_m = float(np.linalg.norm(h.pos - self.last_hand[1]))
+                if step_m > cfg.max_hand_step_m:
+                    return self._fault(f"hand jumped {step_m * 100:.0f} cm in one update "
+                                       f"(> {cfg.max_hand_step_m * 100:.0f}): tracking catch-up? keep it in view")
+                speed = step_m / (h.t - self.last_hand[0])
                 if speed > cfg.max_hand_speed_mps:
                     return self._fault(f"hand jumped at {speed:.1f} m/s (> {cfg.max_hand_speed_mps}): "
                                        "tracking catch-up? keep the controller in view")
