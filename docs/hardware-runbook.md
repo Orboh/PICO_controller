@@ -1,10 +1,11 @@
 # Gate 5 — supervised real-arm sessions with the PICO (runbook + spotter card)
 
-Status: one approved supervised left-arm test on 2026-10-31 (session 2, log-010/011; session 1 not counted). What that covers and does not:
-**covered** left arm, position only, TCP offset 0.1025 (assumed), follower checkout
-`openarm-orboh` `feat/takeei-wood-l1` @ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19.
-**Not covered** right arm, both arms at once, the gripper by trigger (open angle −60° not
-re-measured), recording, a measured TCP, the default branches.
+Status: approved supervised left-arm tests on 2026-10-31: session 2 (directions) and session 3 (gripper
+by trigger), operator Kota-san, spotter Suraj (log-010/011/014). **Covered**: left arm, position control,
+gripper by trigger, TCP offset 0.1025 (assumed), follower checkout `openarm-orboh` `feat/takeei-wood-l1`
+@ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19. **Not covered**: right arm, both arms,
+**wrist rotation (`--orientation`): do not use on the arm before go/no-go item 10**, recording, a
+measured TCP, the default branches.
 Source rules: `notion/OpenArm 安全プロトコル…md` (archived copy), Kento's request §8-9.
 If anything surprises anyone: **stop** (spotter card below).
 
@@ -20,6 +21,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count |
 | 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done |
 | 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted |
+| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | pending |
 
 ## Roles
 - **Spotter**: beside the arm, hand on the emergency stop, status terminal turned toward them.
@@ -53,6 +55,10 @@ If anything surprises anyone: **stop** (spotter card below).
 5. Spotter: arm still, compare with the start pose → **"ready"**.
 6. Wearer, first squeezes test signs only: **2 cm forward** → release; **2 cm left** → release;
    **2 cm up** → release. Spotter says each direction aloud ("forward OK" …). **Trigger untouched.**
+6b. Wrist rotation (only after step 6 passes and go/no-go item 10 is PASS): stop with `esc`, restart
+   the sender **with `--orientation`** and the follower (R2). One axis per squeeze, **about 10°,
+   slowly**, in this order: yaw, pitch, roll: turn → hold → turn back → release. The spotter calls
+   each ("yaw OK"). Trigger untouched. Up to 20° only after all three pass.
 7. Only after all three: small slow motions **≤ 10 cm** per squeeze, one arm. Larger ranges only
    as a planned, logged change of this rule.
 8. End: wearer releases the grip (`HOLD`) → spotter says **"esc"** → keyboard person presses `esc`
@@ -72,4 +78,6 @@ If anything surprises anyone: **stop** (spotter card below).
 | `echo of packets we did not send` | **emergency stop** | another sender drives this arm; find and stop it |
 | the wearer's hand leaves the headset's view while engaged | call "release" | a hidden controller is not detected (log-007) |
 | wearer squeezes before "ready" | call "release" | repeat R1 |
+| (with `--orientation`) the wrist turns while the hand's position is still | expected only if the wearer turned the hand (it may finish turning ~0.5 s later, 90°/s limit); otherwise call "release" | — |
+| (with `--orientation`) fingers or the flange swing toward the table or the arm | call "release" | if it does not stop: emergency stop |
 | anything unexpected | stop the session | log it before resuming |

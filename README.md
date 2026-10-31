@@ -18,6 +18,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
+| 2b wrist rotation | offline PASS (log-015); **dry run pending**; not used on the arm | dry run → supervised arm session with `--orientation` |
 | 5 hardware | **PASS** 2026-10-31, left arm: directions (session 2) and gripper by trigger (session 3), operator Kota-san, spotter Suraj (log-010/011/014) | right arm; wrist rotation; gripper force feedback; follower-feedback patch (Kento) |
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
@@ -33,7 +34,7 @@ facing the same way it faces**, then recenter the headset (forward for you = for
 | **Grip, open fully (< 0.4)** | HOLD: no new targets are sent; the arm finishes the last small step (≤ 0.9° per joint, one 20 ms cycle) and stays there. Settling on the real arm: to be measured in the first 2 cm test. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-58°, 2° short of the measured stop at -60.1°), fully pulled = closed (0°). **Gentle sync:** after each engage the gripper moves **slowly (30°/s)** toward where the trigger says until they match, then follows at normal speed. Example: at start the gripper is closed and the trigger released, so after engaging it opens slowly over ~2 s; release the grip to stop it. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
-| **Wrist rotation** (only with `--orientation`) | turning your hand turns the gripper about the same axis by the same angle (relative to how it was when you engaged), at most 90°/s; position keeps following as usual | ENGAGED only; off by default until validated on the arm |
+| **Wrist rotation** (only with `--orientation`) | turning your hand turns the gripper about the same axis by the **same angle (1:1; position stays half scale)**. Relative: the controller's tilt at the moment you squeeze counts as zero; turning 20° from there turns the gripper 20°; release and squeeze again re-zeroes it. The gripper turns at most 90°/s, so after a fast hand turn it **keeps turning briefly** (a 45° snap ≈ 0.5 s) until it catches up. Wrist turns count toward the 60° posture limit. | ENGAGED only; **off by default; not yet used on the arm** |
 | A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
 | **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). Before starting the sender again: restart the follower (runbook R2). | always |
 
@@ -56,8 +57,8 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
-| `wrist cannot reach that rotation` | the asked rotation is beyond the wrist's range (e.g. joint_6 ±45°) | turn the hand back toward where you engaged, release, squeeze |
-| `hand rotation jumped … deg in one update` | the controller's rotation jumped (tracking catch-up) | keep the controller in view; release, squeeze |
+| `wrist cannot reach that rotation (… deg off)` | the IK cannot reach the asked orientation within 3° (wrist ranges with margin: joint_5 ±88°, joint_6 ±43°, joint_7 ±88°) | release → turn the hand back → wait for "ready" → squeeze; same FAULT twice → stop |
+| `hand rotation jumped … deg in one update` | the controller's rotation changed > 45° between two PICO updates (11 ms): only a tracking catch-up does that | keep the controller in view; release → "ready" → squeeze |
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
@@ -156,6 +157,20 @@ Release between moves (it re-anchors) and **release before bringing the hand bac
 (hold both controllers in front of you: the right one must read at XR +x of the left one, log-008) and
 **never change the `frames.py` matrix from a left/right report alone**. Ctrl-C ends it. Any wrong sign or
 axis → stop and report; do not go near an arm. Log it like gate 1 (runbook item 2 → PASS, owner Suraj).
+
+### Wrist-rotation dry run (no arm; before any `--orientation` on the arm)
+```bash
+cd ~/projects/PICO-controller && bash scripts/pico_env.sh python -m pico_teleop.sender --dry-run --arms left --orientation
+```
+Squeeze and hold, turn the hand about **20°** on ONE axis, hold 2 s, read the line's `rot x… y… z… deg`
+(robot frame: x forward, y left, z up), release, turn back. Position (`TCP moved`) should stay within ±1 cm.
+
+| Hand turn (about 20°) | Expected `rot` |
+|---|---|
+| **roll**: twist the wrist so the top of the controller tips to your **right** (clockwise as you look forward) | x ≈ **+20**, y and z within ±3 |
+| **pitch**: tip the **front** of the controller **down** | y ≈ **+20**, x and z within ±3 |
+| **yaw**: turn the front of the controller to your **left** (counter-clockwise seen from above) | z ≈ **+20**, x and y within ±3 |
+Repeat with `--arms right`. A wrong sign or axis: stop and report (do not edit `frames.py`). Log it.
 
 ## Before any real-arm run (gate 5)
 
