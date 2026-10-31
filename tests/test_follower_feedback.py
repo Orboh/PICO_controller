@@ -156,17 +156,19 @@ def test_fault_cleared_by_release_while_link_down():
     assert ch.arm.state == HOLD and "fault cleared" in ev
 
 
-def test_facing_away_refuses_engage_and_faults():
-    """Operator turned ~100 deg (live, log-016): hand motion would map to the wrong robot axes."""
+def test_facing_checked_only_when_starting():
+    """Body turned ~100 deg: no start. Head turned ~55 deg to watch the arm (log-020): start allowed
+    at <= 75 deg, and turning the head while engaged does NOT stop the arm."""
     ch = _ch(0.0)
-    c0 = ControllerSample((0.2, 1.0, -0.4) + ID, 0.0, 1.0)
-    ch.tick(c0, True, "ok/ok", time.monotonic(), None, 5.0)
-    _, ev = ch.tick(ControllerSample((0.2, 1.0 + 1e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, -100.0)
-    assert ch.arm.state == HOLD and "face forward" in ev
-    ch.tick(ControllerSample((0.2, 1.0 + 2e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, 3.0)
+    c = lambda g, k: ControllerSample((0.2, 1.0 + 1e-6 * k, -0.4) + ID, g, 1.0)
+    ch.tick(c(0.0, 0), True, "ok/ok", time.monotonic(), None, 5.0)
+    _, ev = ch.tick(c(1.0, 1), True, "ok/ok", time.monotonic(), None, -100.0)
+    assert ch.arm.state == HOLD and "when starting" in ev
+    ch.tick(c(1.0, 2), True, "ok/ok", time.monotonic(), None, 55.0)
     assert ch.arm.state == ENGAGED
-    ch.tick(ControllerSample((0.2, 1.0 + 3e-6, -0.4) + ID, 1.0, 1.0), True, "ok/ok", time.monotonic(), None, 45.0)
-    assert ch.arm.state == "FAULT"
+    for k in range(3, 10):  # head swings to watch the arm, even past the limit: still engaged
+        ch.tick(c(1.0, k), True, "ok/ok", time.monotonic(), None, 90.0)
+    assert ch.arm.state == ENGAGED
 
 
 def test_headset_facing_from_live_recordings():

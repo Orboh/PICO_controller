@@ -27,8 +27,9 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
 Left controller drives the left arm, right controller the right arm. Stand **behind the robot,
 facing the same way it faces**, then recenter the headset (forward for you = forward for the arm).
-**Keep facing that way while engaged**: the sender refuses to engage, and FAULTs, when the headset
-faces more than 30° away (status line shows `facing ±N deg`).
+**Start each squeeze facing roughly forward**: the sender refuses to START when the headset faces
+more than 75° away from the robot's forward. Once engaged you may turn your head to watch the arm
+(the motion comes from the controller's position, not the head). The status line shows `facing ±N deg`.
 
 | Input | Effect | When |
 |---|---|---|
@@ -55,7 +56,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | Message in the terminal | Plain meaning | What to do |
 |---|---|---|
 | `input stale` (> 0.4 s without new PICO data) / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
-| `operator faces … deg from the robot's forward` | the headset looks more than 30° away from the direction it was recentered to (= robot forward). Hand motions would map onto the wrong robot axes | turn back to face the robot's forward, or recenter the headset while facing it (long-press Home), then squeeze |
+| `operator faces … deg from the robot's forward … when starting` | at the moment you squeezed, the headset looked more than 75° away from the robot's forward (e.g. your body is turned toward the PC) | turn your body to face the robot's forward (recenter if needed), then squeeze; once engaged you may look at the arm |
 | `target unreachable` | the hand asked for a point the arm cannot reach | release, bring the hand back toward you, squeeze |
 | `near singular` | the arm is almost straight | same as above |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |

@@ -125,7 +125,7 @@ class ArmChannel:
 
     def __init__(self, side: str, start: dict, cfg: TeleopConfig, link: Link | None, urdf: str,
                  link_timeout_s: float, tcp_offset_m: float, max_track_err_deg: float = 8.0,
-                 max_link_pause_s: float = 5.0, max_facing_deg: float = 30.0):
+                 max_link_pause_s: float = 5.0, max_facing_deg: float = 75.0):
         self.side, self.link, self.link_timeout_s = side, link, link_timeout_s
         self.max_track_err_deg = max_track_err_deg  # safety protocol §1 L0: |measured - commanded| > 8 deg
         # Keep sending the HOLD target through a receiver pause (episode save) only this long. After
@@ -133,8 +133,9 @@ class ArmChannel:
         # no step check (Elephant m5 #1). 5 s is a guess until record pauses are measured on the
         # follower PC; the real fix is a receiver instance id in the echo (proposal patch).
         self.max_link_pause_s = max_link_pause_s
-        # The XR "forward" is fixed at recenter; an operator turned away maps hand motion onto the wrong
-        # robot axes (2026-10-31: headset at -100 deg turned a twist into a tilt, log-016).
+        # The XR "forward" is fixed at recenter; an operator whose BODY is turned away maps hand motion onto
+        # the wrong robot axes (headset at -100 deg turned a twist into a tilt, log-016). Head turns to watch
+        # the arm (+45..58 deg, log-020) are harmless, so only the start of a squeeze is checked.
         self.max_facing_deg = max_facing_deg
         self.stopped = False
         self.foreign = False          # latched: another sender's echoes were seen on this port
@@ -236,9 +237,11 @@ class ArmChannel:
                    "lost": "link down: no echo from the receiver"}.get(ls, f"input {stream_state}")
             if self.foreign:
                 why = "another sender on this port (locked until restart)"
-            if ok and facing_deg is not None and abs(facing_deg) > self.max_facing_deg:
+            # Facing is checked only when STARTING (HOLD -> engage): the head may then turn to watch the arm,
+            # because the motion comes from the controller's position, not the head (log-020/021).
+            if ok and self.arm.state != ENGAGED and facing_deg is not None and abs(facing_deg) > self.max_facing_deg:
                 ok, why = False, (f"operator faces {facing_deg:+.0f} deg from the robot's forward "
-                                  f"(> {self.max_facing_deg:.0f}): face forward or recenter the headset")
+                                  f"(> {self.max_facing_deg:.0f}) when starting: face forward or recenter the headset")
             if not ok:  # following is not allowed, but a FAULT may still be cleared by a real release
                 cleared = self.arm.clear_fault_on_release(self.adapter(ctrl, fresh, why, t_device))
                 event = " | ".join(e for e in (event, cleared) if e) or None
@@ -283,8 +286,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--link-timeout-s", type=float, default=1.0)
     ap.add_argument("--stale-s", type=float, default=0.4,
                     help="input older than this = stale (FAULT while engaged); 0.4 s from live PICO data")
-    ap.add_argument("--max-facing-deg", type=float, default=30.0,
-                    help="refuse/FAULT when the headset faces further than this from the robot's forward")
+    ap.add_argument("--max-facing-deg", type=float, default=75.0,
+                    help="refuse to START (engage) when the headset faces further than this from the robot's "
+                         "forward; no FAULT while engaged (the head may turn to watch the arm)")
     ap.add_argument("--max-link-pause-s", type=float, default=5.0,
                     help="after this long without echo, stop sending for good (runbook R2)")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
@@ -370,7 +374,11 @@ def main(argv=None) -> int:
                         rot = f" rot x{w[0]:+5.0f} y{w[1]:+5.0f} z{w[2]:+5.0f} deg"
                     lk = "SENDING STOPPED " if ch.stopped else ("LINK DOWN " if ch.link_down else "")
                     fy = headset_facing_deg(fr.headset)
-                    lk += f"facing {fy:+.0f}deg " if fy is not None else ""
+                    if fy is not None:
+                        lk += f"facing {fy:+.0f}deg" + (" (TURNED: check your body faces forward) "
+                                                         if abs(fy) > ch.max_facing_deg else " ")
+                    if not fr.t_device_ns:
+                        lk += "NO PICO DATA: turn sending on in the app "
                     print(f"[{ch.side:5s}] {lk}{ch.arm.state:7s} input={tr.stream}/{tr.side_state[ch.side]} {st}  "
                           f"TCP moved x{d[0]:+5.1f} y{d[1]:+5.1f} z{d[2]:+5.1f} cm{rot}", flush=True)
             if chans and all(ch.stopped for ch in chans):
