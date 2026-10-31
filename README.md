@@ -15,7 +15,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 |---|---|---|
 | 1 input-only diagnostic | **PASS live** 2026-10-31, all 5 phases (log-007, `evidence/gate1`) | — (finding: a hidden controller is not detectable) |
 | 2 offline mapping / IK | done offline (tests + `evidence/gate2`, all PASS) | measure the real grasp point (`--tcp-offset-m`); gripper open angle (-60° not re-measured); view a run in Meshcat |
-| 3 fake receiver | done offline (real receiver class, localhost) | — |
+| 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
 | 4 recording dry run | **blocked**: needs the follower PC + cameras | run `lerobot-record` with the PICO sender (log-006) |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
 | 5 hardware | **blocked** | follower-pose feedback (patch) **or** Kento accepts rules R1-R3 in writing (runbook item 7); safety protocol prerequisites (below); right-arm zero/sign check |
