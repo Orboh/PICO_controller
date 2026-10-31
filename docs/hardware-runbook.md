@@ -17,7 +17,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | 4 | PSU switches | which switch = which arm, labelled, reachable by the spotter | **daily** | spotter (name) | done |
 | 5 | Arm and side | left arm only until the right arm's zero/sign is checked | per plan | Suraj + Kento | left |
 | 6 | Start pose and checkout | sender prints the start-pose sha = `sha256sum` of the follower's file; follower checkout branch + commit as above (or a newer one Kento names) | **daily** | Suraj | PASS (sha 2ec31fb82bf0) |
-| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kento's OK for R1-R4 **in writing** (Slack/Notion link here) | until the patch lands | Kento | **relayed only: get it in writing** |
+| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kento/Kota OK for R1-R4 **in writing** (Slack/Notion link here) | until the patch lands | Kento / Kota | sessions 1-2 ran on a **spoken** OK relayed by Suraj; written: Kota's Slack "@Suraj Paliwal 実験していいよ" 12:59 (after the sessions; general, no scope) https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 |
 | 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done |
 | 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted |
 
