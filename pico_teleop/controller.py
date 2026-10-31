@@ -70,7 +70,10 @@ class TeleopConfig:
     max_rot_speed_dps: float = 90.0    # rate limit of the gripper's target rotation
     ik_rot_tol_deg: float = 3.0        # accepted orientation error, else FAULT (unreachable)
     ik_rot_weight: float = 0.3         # IK weight: 1 rad of orientation error ~ 0.3 m of position
-    max_hand_rot_step_deg: float = 45.0  # hand rotated this much in ONE device update -> FAULT
+    max_hand_rot_step_deg: float = 30.0  # hand rotated this much in ONE device update -> FAULT
+    max_hand_rot_speed_dps: float = 720.0  # hand rotation speed on the device clock -> FAULT. Live data
+                                           # (log-015): normal p99 <= 220, max 470 deg/s; catch-ups 1732-4466
+    max_rot_lag_deg: float = 40.0      # gripper target trailing the hand's asked rotation -> FAULT
     joint_margin_deg: float = 2.0
 
 
@@ -140,6 +143,7 @@ class ArmTeleop:
         self.squeeze_t0: float | None = None  # device time the current squeeze started
         self.last_hand: tuple[float, np.ndarray] | None = None  # (device t, pos) for the speed check
         self.last_hand_rot: np.ndarray | None = None
+        self.last_rot_t: float | None = None
         self.anchor_hand_rot: np.ndarray | None = None
         self.anchor_tcp_rot: np.ndarray | None = None
         self.R_target: np.ndarray | None = None       # rate-limited gripper orientation target
@@ -229,7 +233,7 @@ class ArmTeleop:
             self.anchor_tcp_rot = M0.rotation.copy()
             self.R_target = M0.rotation.copy()
             self.anchor_hand_rot = h.rot.copy() if h.rot is not None else None
-            self.last_hand_rot = self.anchor_hand_rot
+            self.last_hand_rot, self.last_rot_t = self.anchor_hand_rot, h.t
             self.anchor_q = self.q.copy()
             self.p_target = self.anchor_tcp.copy()
             self.q_ik = self.q.copy()
@@ -254,7 +258,12 @@ class ArmTeleop:
             if step > cfg.max_hand_rot_step_deg:
                 return self._fault(f"hand rotation jumped {step:.0f} deg in one update "
                                    f"(> {cfg.max_hand_rot_step_deg:.0f}): tracking catch-up? keep it in view")
-            self.last_hand_rot = h.rot.copy()
+            dt_rot = (h.t - self.last_rot_t) if (h.t is not None and self.last_rot_t is not None) else None
+            if dt_rot is not None and dt_rot > 0 and step / dt_rot > cfg.max_hand_rot_speed_dps:
+                return self._fault(f"hand rotation jumped at {step / dt_rot:.0f} deg/s "
+                                   f"(> {cfg.max_hand_rot_speed_dps:.0f}): tracking catch-up? keep it in view")
+            if h.t is None or self.last_rot_t is None or h.t > self.last_rot_t:
+                self.last_hand_rot, self.last_rot_t = h.rot.copy(), h.t
         p_des_check = self.anchor_tcp + cfg.scale * (h.pos - self.anchor_hand)
         lag_m = float(np.linalg.norm(p_des_check - self.p_target))
         if lag_m > cfg.max_target_lag_m:
@@ -275,6 +284,9 @@ class ArmTeleop:
                 R_des = (h.rot @ self.anchor_hand_rot.T) @ self.anchor_tcp_rot
                 w = pin.log3(R_des @ self.R_target.T)
                 ang, lim_r = float(np.linalg.norm(w)), math.radians(cfg.max_rot_speed_dps) * self.dt
+                if math.degrees(ang) > cfg.max_rot_lag_deg:  # also keeps log3 far from its pi flip
+                    return self._fault(f"hand turned {math.degrees(ang):.0f} deg ahead of the gripper "
+                                       f"(> {cfg.max_rot_lag_deg:.0f}): turn slower")
                 R_tgt = pin.exp3(w * (lim_r / ang) if ang > lim_r else w) @ self.R_target
                 res, rot_err = self.kin.solve_pose(p_tgt, R_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
                                                    max_iter=cfg.ik_max_iter, w_rot=cfg.ik_rot_weight)

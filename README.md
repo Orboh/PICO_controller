@@ -58,7 +58,8 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
 | `wrist cannot reach that rotation (… deg off)` | the IK cannot reach the asked orientation within 3° (wrist ranges with margin: joint_5 ±88°, joint_6 ±43°, joint_7 ±88°) | release → turn the hand back → wait for "ready" → squeeze; same FAULT twice → stop |
-| `hand rotation jumped … deg in one update` | the controller's rotation changed > 45° between two PICO updates (11 ms): only a tracking catch-up does that | keep the controller in view; release → "ready" → squeeze |
+| `hand rotation jumped … deg in one update` or `… at … deg/s` | the controller's rotation changed > 30° in one PICO update or faster than 720°/s: only a tracking catch-up does that | keep the controller in view; release → "ready" → squeeze |
+| `hand turned … deg ahead of the gripper` | you turned faster than the gripper may follow (90°/s) and it fell 40° behind | release → turn back → "ready" → squeeze; turn slower |
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
@@ -170,7 +171,9 @@ Squeeze and hold, turn the hand about **20°** on ONE axis, hold 2 s, read the l
 | **roll**: twist the wrist so the top of the controller tips to your **right** (clockwise as you look forward) | x ≈ **+20**, y and z within ±3 |
 | **pitch**: tip the **front** of the controller **down** | y ≈ **+20**, x and z within ±3 |
 | **yaw**: turn the front of the controller to your **left** (counter-clockwise seen from above) | z ≈ **+20**, x and y within ±3 |
-Repeat with `--arms right`. A wrong sign or axis: stop and report (do not edit `frames.py`). Log it.
+Do it twice per arm: once with the hand **neutral** at engage, once with the hand **held tilted (45-90°)**
+at engage (this is what checks the quaternion convention; the offline tests cannot). Repeat with
+`--arms right`. A wrong sign or axis: stop and report (do not edit `frames.py`). Log it.
 
 ## Before any real-arm run (gate 5)
 

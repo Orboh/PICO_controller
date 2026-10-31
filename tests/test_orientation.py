@@ -103,9 +103,74 @@ def test_rotation_jump_faults():
 def test_unreachable_rotation_faults():
     arm = _arm()
     events = []
-    for i in range(1, 200):  # keep turning about x (joint_6 is limited to +-45 deg)
-        out = arm.step(ADAPT(_c((1, 0, 0), min(4.0 * i, 170.0)), True))
+    for i in range(1, 400):  # keep turning about x slowly (75 deg/s < 90 deg/s limit, no lag FAULT)
+        out = arm.step(ADAPT(_c((1, 0, 0), min(1.5 * i, 170.0)), True))
         events.append(out.event or "")
         if out.state == FAULT:
             break
     assert out.state == FAULT and any(k in out.event for k in ("rotation", "IK jumped", "posture", "singular"))
+
+
+def _c_rot(R_robot, delta=(0, 0, 0), grip=1.0):
+    _n[0] += 1
+    p = XR0 + R_ROBOT_FROM_XR.T @ (np.asarray(delta, float) + 1e-6 * (_n[0] % 5))
+    return ControllerSample(tuple(p) + _quat_from_robot_rot(R_robot), grip, 1.0)
+
+
+def _arm_engaged_at(R0, side="left", **cfg):
+    cfg.setdefault("engage_hold_s", 0.0)
+    cfg.setdefault("orientation", True)
+    arm = ArmTeleop(side, ArmKinematics(side, limits_deg=FOLLOWER_LIMITS_DEG[side], margin_deg=2.0),
+                    load_start_pose(side), TeleopConfig(**cfg))
+    arm.step(ADAPT(_c_rot(R0, grip=0.0), True))
+    assert arm.step(ADAPT(_c_rot(R0), True)).state == ENGAGED
+    return arm
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_tilted_anchor_with_translation(side):
+    """Engaged with the hand already turned 90 deg about z; then +20 deg about x while moving 5 cm.
+    The gripper must turn +20 deg about robot x (a world axis), whatever the grip angle at engage."""
+    R0 = pin.exp3(np.array([0.0, 0.0, math.radians(90)]))
+    arm = _arm_engaged_at(R0, side)
+    for i in range(1, 51):
+        u = i / 50
+        R = pin.exp3(np.array([math.radians(20 * u), 0.0, 0.0])) @ R0
+        out = arm.step(ADAPT(_c_rot(R, delta=(0.05 * u, 0, 0)), True))
+        assert out.state == ENGAGED, out.event
+    for _ in range(40):
+        arm.step(ADAPT(_c_rot(R, delta=(0.05, 0, 0)), True))
+    w = _tcp_rot_deg(arm)
+    assert np.linalg.norm(w - np.array([20.0, 0.0, 0.0])) < 2.0, w
+
+
+def test_rotation_speed_fault_on_device_clock():
+    arm = _arm()
+    t = 1.0
+    for i in range(5):
+        t += 0.011
+        arm.step(ADAPT(_c((0, 0, 1), 0.5 * i), True, "", t))
+    out = arm.step(ADAPT(_c((0, 0, 1), 2.0 + 25.0), True, "", t + 0.011))  # 25 deg in 11 ms = 2270 deg/s
+    assert out.state == FAULT and "deg/s" in out.event
+
+
+def test_rotation_lag_fault():
+    arm = _arm()
+    out = None
+    for i in range(1, 40):  # 28 deg per update would trip the step check; 25 deg per update, no t
+        out = arm.step(ADAPT(_c((0, 0, 1), min(25.0 * i, 100.0)), True))
+        if out.state == FAULT:
+            break
+    assert out.state == FAULT and "ahead of the gripper" in out.event
+
+
+def test_reengage_while_rotated_has_no_jump():
+    arm = _arm()
+    for i in range(1, 41):
+        arm.step(ADAPT(_c((0, 1, 0), 0.5 * i), True))
+    arm.step(ADAPT(_c((0, 1, 0), 20.0, grip=0.0), True))  # release while turned
+    held = arm.action()
+    out = arm.step(ADAPT(_c((0, 1, 0), 35.0), True))       # re-engage with the hand turned further
+    assert out.state == ENGAGED and out.action == held
+    out = arm.step(ADAPT(_c((0, 1, 0), 35.0), True))
+    assert max(abs(out.action[k] - held[k]) for k in held) < 0.05
