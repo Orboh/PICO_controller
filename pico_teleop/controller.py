@@ -16,6 +16,7 @@ Engaging needs the clutch held for `engage_hold_s` (0.3 s) on valid samples.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -77,8 +78,13 @@ class TeleopConfig:
     rot_fault_deg: float = 20.0        # orientation off by more than this after IK -> FAULT; below it the
                                        # gripper follows the position with the best reachable rotation
     # --- session guards (log-017, after arm session 4: 58 FAULTs, re-engage loops, arm crept to limits)
-    fault_lock_count: int = 2          # the same FAULT this many times ...
+    fault_lock_count: int = 2          # the same FAULT kind this many times ...
     fault_lock_window_s: float = 30.0  # ... within this window -> engaging LOCKED until the sender restarts
+    fault_lock_any_count: int = 3      # or ANY FAULTs this many times ...
+    fault_lock_any_window_s: float = 60.0  # ... within this window -> LOCKED (mixed-FAULT loops, log-017)
+    limit_guard_deg: float = 3.0       # an IK answer this close to a joint limit (margin incl.) that moves
+                                       # TOWARD the limit -> FAULT (the 60 deg drift alone does not keep j1 off)
+    rot_gap_fault_s: float = 0.5       # hand-to-gripper rotation gap > rot_fault_deg for this long -> FAULT
     max_session_drift_deg: float = 60.0  # no joint may get further than this from the session's start pose
     joint_margin_deg: float = 2.0
 
@@ -148,6 +154,10 @@ class ArmTeleop:
         self.q_session = self.q.copy()     # start pose of this sender session (drift limit)
         self.n_steps = 0                   # step() calls; x dt = session time for the FAULT window
         self.fault_times: dict[str, list[float]] = {}
+        self.any_fault_times: list[float] = []
+        self.refused_this_squeeze = False  # print "engage refused" once per squeeze, not every cycle
+        self.rot_gap_since: float | None = None
+        self.n_rot_fallback = 0            # cycles that fell back to position-only (evidence, log-018)
         self.locked: str | None = None     # reason engaging is locked (cleared only by a restart)
         self.squeeze_steps = 0             # consecutive valid squeezed steps while HOLD (engage delay)
         self.squeeze_t0: float | None = None  # device time the current squeeze started
@@ -169,13 +179,21 @@ class ArmTeleop:
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
         self.q_ik = self.q.copy()
-        key = why.split("(")[0].split(":")[0].strip()[:30]
+        # kind of FAULT: message head with numbers and joint indices removed ("IK jumped 5.6 deg" and
+        # "IK jumped 6.5 deg" are the same kind; so are "joint_1 would ..." and "joint_7 would ...")
+        key = re.sub(r"[-+]?\d+(\.\d+)?", "N", re.sub(r"joint_\d", "joint_N", why.split("(")[0]))
+        key = key.split(":")[0].strip()[:40]
         now = self.n_steps * self.dt
         times = [t for t in self.fault_times.get(key, []) if now - t <= self.cfg.fault_lock_window_s] + [now]
         self.fault_times[key] = times
-        if len(times) >= self.cfg.fault_lock_count and self.locked is None:
-            self.locked = (f"the same FAULT ({key}) {len(times)}x within {self.cfg.fault_lock_window_s:.0f} s: "
-                           "engaging LOCKED. Stop: esc the follower, restart follower and sender (R2)")
+        self.any_fault_times = [t for t in self.any_fault_times if now - t <= self.cfg.fault_lock_any_window_s] + [now]
+        reason = None
+        if len(times) >= self.cfg.fault_lock_count:
+            reason = f"the same FAULT ({key}) {len(times)}x within {self.cfg.fault_lock_window_s:.0f} s"
+        elif len(self.any_fault_times) >= self.cfg.fault_lock_any_count:
+            reason = f"{len(self.any_fault_times)} FAULTs within {self.cfg.fault_lock_any_window_s:.0f} s"
+        if reason and self.locked is None:
+            self.locked = reason + ": engaging LOCKED. Stop: esc the follower, restart follower and sender (R2)"
             return self._out(f"FAULT: {why} | LOCKED: {self.locked}")
         return self._out(f"FAULT: {why} (targets frozen; release grip, then squeeze to re-anchor)")
 
@@ -236,15 +254,21 @@ class ArmTeleop:
         if self.state == HOLD:
             if not (h.valid and self.armed and h.clutch >= cfg.clutch_on):
                 self.reset_squeeze()
+                self.refused_this_squeeze = False
                 return self._out()
+            refuse = None
             if self.locked:
+                refuse = self.locked
+            else:
+                drift = float(np.max(np.abs(np.rad2deg(self.q - self.q_session))))
+                if drift > cfg.max_session_drift_deg:
+                    refuse = (f"the arm is {drift:.0f} deg from the session start pose "
+                              f"(> {cfg.max_session_drift_deg:.0f}): end with esc and restart (R2)")
+            if refuse:
                 self.reset_squeeze()
-                return self._out("engage refused: " + self.locked)
-            drift = float(np.max(np.abs(np.rad2deg(self.q - self.q_session))))
-            if drift > cfg.max_session_drift_deg:
-                self.reset_squeeze()
-                return self._out(f"engage refused: the arm is {drift:.0f} deg from the session start pose "
-                                 f"(> {cfg.max_session_drift_deg:.0f}): end with esc and restart (R2)")
+                first = not self.refused_this_squeeze
+                self.refused_this_squeeze = True
+                return self._out("engage refused: " + refuse if first else None)
             # Hold time on the DEVICE clock when known (a stalled sample must not count), else ticks.
             self.squeeze_steps += 1
             if h.t is not None and self.squeeze_t0 is None:
@@ -265,6 +289,7 @@ class ArmTeleop:
             self.p_target = self.anchor_tcp.copy()
             self.q_ik = self.q.copy()
             self.state, self.grip_synced = ENGAGED, False
+            self.rot_gap_since = None
             return self._out("ENGAGED: anchored at the current target (no jump)")
 
         # ENGAGED and valid: input sanity (a hidden controller "catches up" in one jump, log-008)
@@ -320,15 +345,24 @@ class ArmTeleop:
                 if res.err_m > cfg.ik_tol_m:
                     # Position first: if position + rotation together are not reachable, follow the
                     # position with the rotation the arm can do (orientation free, seeded here).
+                    self.n_rot_fallback += 1
                     res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
                                                   max_iter=cfg.ik_max_iter)
                     R_got = self.kin.fk(res.q).rotation
                     rot_err = float(np.linalg.norm(pin.log3(R_got @ R_tgt.T)))
-                if math.degrees(rot_err) > cfg.rot_fault_deg:
-                    return self._fault(f"wrist cannot reach that rotation ({math.degrees(rot_err):.0f} deg off): "
-                                       "turn the hand back")
-                if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
-                    R_tgt = self.kin.fk(res.q).rotation  # best reachable rotation becomes the target
+                if res.err_m <= cfg.ik_tol_m:  # position reachable: now judge the rotation
+                    R_got = self.kin.fk(res.q).rotation
+                    gap = math.degrees(float(np.linalg.norm(pin.log3(R_got @ R_des.T))))  # vs the HAND
+                    t_now = self.n_steps * self.dt
+                    if gap > cfg.rot_fault_deg:
+                        self.rot_gap_since = self.rot_gap_since if self.rot_gap_since is not None else t_now
+                        if t_now - self.rot_gap_since >= cfg.rot_gap_fault_s:
+                            return self._fault(f"wrist cannot reach that rotation (gripper {gap:.0f} deg from the "
+                                               f"hand for {cfg.rot_gap_fault_s:.1f} s): turn the hand back")
+                    else:
+                        self.rot_gap_since = None
+                    if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
+                        R_tgt = R_got  # best reachable rotation becomes the target
             else:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
@@ -339,6 +373,13 @@ class ArmTeleop:
             jump = float(np.max(np.abs(np.rad2deg(res.q - self.q_ik))))
             if jump > cfg.max_ik_jump_deg:
                 return self._fault(f"IK jumped {jump:.1f} deg in one cycle (> {cfg.max_ik_jump_deg})")
+            room_new = np.rad2deg(np.minimum(res.q - self.kin.lo, self.kin.hi - res.q))
+            room_now = np.rad2deg(np.minimum(self.q_ik - self.kin.lo, self.kin.hi - self.q_ik))
+            near = (room_new < cfg.limit_guard_deg) & (room_new < room_now - 1e-6)
+            if near.any():
+                j = int(np.argmax(near)) + 1
+                return self._fault(f"joint_{j} would come within {room_new[j - 1]:.1f} deg of its limit "
+                                   f"(< {cfg.limit_guard_deg:.0f}): move back")
             drift = np.abs(np.rad2deg(res.q - self.q_session))
             if drift.max() > cfg.max_session_drift_deg:
                 j = int(drift.argmax()) + 1

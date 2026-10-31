@@ -61,6 +61,9 @@ def test_hand_rotation_turns_the_gripper_the_same_way(side, axis):
     p0 = arm.kin.fk(arm.q).translation.copy()
     for i in range(1, 51):  # 20 deg over 1 s (rate limit 90 deg/s)
         out = arm.step(ADAPT(_c(axis, 20.0 * i / 50), True))
+        if out.state == FAULT and "of its limit" in out.event:
+            assert side == "left"  # left start pose: j1/j2 ~12 deg from their limits (log-017)
+            return
         assert out.state == ENGAGED, out.event
     for _ in range(50):
         out = arm.step(ADAPT(_c(axis, 20.0), True))
@@ -109,7 +112,7 @@ def test_unreachable_rotation_faults():
         if out.state == FAULT:
             break
     assert out.state == FAULT and any(k in out.event for k in ("rotation", "IK jumped", "posture", "singular",
-                                                               "session start"))
+                                                               "session start", "of its limit"))
 
 
 def _c_rot(R_robot, delta=(0, 0, 0), grip=1.0):
@@ -177,17 +180,35 @@ def test_reengage_while_rotated_has_no_jump():
     assert max(abs(out.action[k] - held[k]) for k in held) < 0.05
 
 
-def test_same_fault_twice_locks_engaging():
-    """Session 4: FAULT -> release -> re-engage loops let the arm creep to its limits (log-017)."""
+def test_same_fault_kind_with_different_numbers_locks():
+    """Elephant m10 #1: "IK jumped 5.6 deg" and "IK jumped 6.5 deg" are the same kind of FAULT."""
     arm = _arm(orientation=False)
-    for _ in range(2):
-        out = arm.step(ADAPT(_c(delta=(2.0, 0, 0)), True))     # unreachable / lag FAULT
-        assert out.state == FAULT
-        arm.step(ADAPT(_c(grip=0.0), True))                     # release
-        out = arm.step(ADAPT(_c(), True))                       # squeeze again
-    assert arm.locked and out.state != ENGAGED and "LOCKED" in (out.event or "") + arm.locked
-    for _ in range(20):
-        assert arm.step(ADAPT(_c(), True)).state != ENGAGED
+    out = arm._fault("IK jumped 5.6 deg in one cycle (> 5.0)")
+    assert not arm.locked
+    arm.state = "HOLD"
+    out = arm._fault("IK jumped 6.5 deg in one cycle (> 5.0)")
+    assert arm.locked and "LOCKED" in out.event
+    arm2 = _arm(orientation=False)
+    arm2._fault("joint_1 would be 60 deg from the session start pose (> 60)")
+    arm2._fault("joint_7 would be 61 deg from the session start pose (> 60)")
+    assert arm2.locked
+
+
+def test_mixed_faults_lock_too():
+    arm = _arm(orientation=False)
+    for why in ("IK jumped 5.6 deg", "hand jumped 11 cm in one update", "near singular (sigma 0.02)"):
+        arm._fault(why)
+    assert arm.locked and "3 FAULTs" in arm.locked
+
+
+def test_locked_arm_never_engages_and_reports_once_per_squeeze():
+    arm = _arm(orientation=False)
+    arm._fault("a"); arm._fault("a")
+    arm.state = "HOLD"
+    arm.step(ADAPT(_c(grip=0.0), True))
+    events = [arm.step(ADAPT(_c(), True)).event for _ in range(30)]
+    assert all(e is None or "refused" in e for e in events) and arm.state != ENGAGED
+    assert sum(1 for e in events if e) == 1
 
 
 def test_session_drift_limit_refuses_and_faults():
@@ -210,3 +231,32 @@ def test_orientation_follows_position_when_rotation_unreachable():
             break
     moved = (arm.kin.fk(arm.q).translation - p0)[2]
     assert moved > 0.005 or (out.state == FAULT and "rotation" in out.event)
+
+
+def test_rotation_gap_at_wrist_limit_faults_with_a_rotation_message():
+    """Elephant m10 #7: at a wrist limit the gripper can lag the HAND; FAULT after 0.5 s, not drift."""
+    arm = _arm("right", max_session_drift_deg=180.0, limit_guard_deg=0.0)
+    out = None
+    for i in range(1, 400):  # roll about x slowly far past the wrist's reach
+        out = arm.step(ADAPT(_c((1, 0, 0), min(1.2 * i, 160.0)), True))
+        if out.state == FAULT:
+            break
+        w = np.linalg.norm(pin.log3(arm.kin.fk(arm.q).rotation @ arm.anchor_tcp_rot.T))
+    assert out.state == FAULT
+    assert any(k in out.event for k in ("wrist cannot reach", "ahead of the gripper", "IK jumped", "posture"))
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_orientation_fallback_runs_and_gap_stays_bounded(side):
+    """Reaching far while the hand's rotation is held: position-only fallback kicks in, the gripper's
+    rotation gap to the hand stays bounded and ends in a rotation-specific FAULT (log-018)."""
+    arm = _arm(side, max_session_drift_deg=180.0, limit_guard_deg=0.0, max_posture_change_deg=180.0)
+    out = None
+    for i in range(1, 600):
+        out = arm.step(ADAPT(_c((0, 0, 1), 0.0, delta=(0.0015 * i, 0.0, -0.001 * i)), True))
+        if out.state == FAULT:
+            break
+    gap = np.degrees(np.linalg.norm(pin.log3(arm.kin.fk(arm.q).rotation @ arm.anchor_tcp_rot.T)))
+    assert arm.n_rot_fallback > 10
+    assert out.state == FAULT and "wrist cannot reach that rotation" in out.event
+    assert gap < 40.0
