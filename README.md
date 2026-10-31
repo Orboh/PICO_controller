@@ -56,7 +56,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
-| `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose | wait for `link back`, then release and squeeze. **If the follower may be restarting: Ctrl-C the sender FIRST** (its held pose would become the restarted follower's first target), then follow R2. If the follower was restarted: restart the sender too (runbook R2) |
+| `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
 | `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 60°) | release, squeeze again: it re-anchors and allows another 60°; if it repeats, stop |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
