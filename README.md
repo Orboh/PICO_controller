@@ -24,6 +24,17 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
+## Plan in progress (2026-11-01, wall fix log-030)
+1. [x] Offline: finish the replays old vs new (today's locked runs + session 4 + pilot redo): no edge locks, no creep
+2. [ ] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
+3. [x] log-030 + commit (deferred: limit avoidance in wrist mode; not possible: headset wall signal / vibration)
+4. [ ] Short Elephant + Goldfish review of the finished wall code
+5. [ ] Arm (supervised, one arm): push slowly into each edge once (joint limit, stretched arm, 60° posture): arm holds, `WALL`, back works, no FAULT/LOCK
+6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
+7. [ ] PICO block × 5 (left) with the wall; wall time per episode from the log
+8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
+Side task: PICO video (FPV) with an on/off button on the controller (log-031).
+
 ## To do after the PICO data collection
 - [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set
   (and the PICO) at −63.4° (~89° apart, log-021). Check the leader↔follower joint_7 calibration; redo pilot block 1.
@@ -65,8 +76,8 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 |---|---|---|
 | `input stale` (> 0.4 s without new PICO data) / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
 | `operator faces … deg from the robot's forward … when starting` | at the moment you squeezed, the headset looked more than 75° away from the robot's forward (e.g. your body is turned toward the PC) | turn your body to face the robot's forward (recenter if needed), then squeeze; once engaged you may look at the arm |
-| `target unreachable` | the hand asked for a point the arm cannot reach | release, bring the hand back toward you, squeeze |
-| `near singular` | the arm is almost straight | same as above |
+| `WALL: … the arm stops here, move back (not a FAULT)` | **log-030:** the move would go deeper into the workspace edge: a joint within 3° of its limit, the arm stretched (sigma < 0.03), a joint past its session drift limit (120° joint_1 / 90°), a joint > 60° from where you squeezed, or a target out of reach. The arm **holds** there, stays ENGAGED and your hand **slips** (pushing further does nothing); moving back follows at once. No FAULT, does not count toward LOCKED. Logged per cycle (`wall` in the JSONL) and summed at exit. | move back; or release and squeeze again |
+| `near singular (sigma … < 0.02)` | the arm is almost fully straight (hard floor; between 0.02 and 0.03 it is a WALL) | release, bring the hand back toward you, squeeze |
 | `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
 | `wrist cannot reach that rotation (… deg off)` | even the best reachable rotation is more than 20° from what your hand asks (smaller gaps: the gripper just follows your position with the closest rotation it can) | release → turn the hand back → "ready" → squeeze |
@@ -75,10 +86,7 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |
-| `joint_N would move … deg from where you engaged` | big posture change in one squeeze (limit 60°) | release, squeeze again: it re-anchors and allows another 60°; if it repeats, stop |
 | `LOCKED: the same FAULT … 2x within 30 s` or `LOCKED: 3 FAULTs within 60 s` | repeated problems: engaging is locked for the rest of this sender run | **stop**: release, `esc` the follower, then restart follower and sender (R2) |
-| `joint_N would come within … deg of its limit` | the move would bring a joint within 3° of its limit (moving away is allowed). The left start pose has joint_1/joint_2 only ~12° from their limits, so leftward moves on the left arm hit this early | move back the other way; release, "ready", squeeze |
-| `joint_N would be … deg from the session start pose` / `engage refused: the arm is … from the session start pose` | the arm would get more than **120° on joint_1** or **90° on any other joint** from where this session started (log-024); stops slow creep into the corners over many squeezes | bring the hand back toward where you started; if refused: `esc` and restart (R2) |
 | `validator: …` | a packet was unsafe (non-finite, over a limit, too big a step) and was not sent | stop the session and report it |
 
 The sender prints the state of each arm once per second and every event as it happens.

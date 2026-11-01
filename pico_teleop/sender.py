@@ -35,6 +35,7 @@ from .poses import POSE_SETS, current_pose_set, load_start_pose, pose_file, pose
 from .validate import ECHO_PORTS, FOLLOWER_LIMITS_DEG, PORTS, ActionValidator, ValidatorConfig
 from .frames import R_ROBOT_FROM_XR, quat_xyzw_to_mat
 from .xr_input import FreshnessTracker, ReplaySource, SdkSource, pose_status
+from .video import DEFAULT_BIN, VideoToggle
 
 def headset_facing_deg(headset_pose) -> float | None:
     """Headset forward (-z) in the robot frame -> yaw from robot +x in degrees (+ = left); None if no pose."""
@@ -318,6 +319,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--premove-forward-cm", type=float, default=0.0,
                     help="if > 0: press Enter in this terminal (arm in HOLD, follower linked) to move the arm this "
                          "far forward slowly, same gripper rotation (log-028; wrist tests). Max 15")
+    ap.add_argument("--video-device", default=None,
+                    help="enable the PICO video (log-031): hold LEFT Y 1 s to start/stop OrinVideoSender on this "
+                         "V4L2 device (chest D435i RGB, e.g. /dev/video4). Not while lerobot-record uses the camera")
+    ap.add_argument("--video-bin", default=DEFAULT_BIN)
+    ap.add_argument("--video-port", type=int, default=13579)
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
     ap.add_argument("--replay", default=None, help="drive from a gate-1 recording instead of the PICO")
     ap.add_argument("--duration-s", type=float, default=None)
@@ -381,6 +387,14 @@ def main(argv=None) -> int:
         threading.Thread(target=_wait_enter, daemon=True).start()
         print(f"[sender] PRE-MOVE ready: when the arm is at the start pose and still, the spotter says 'arm may "
               f"move' and presses Enter here: the arm moves {a.premove_forward_cm:.0f} cm forward slowly", flush=True)
+    video = None
+    if a.video_device:
+        if not os.path.exists(a.video_bin):
+            print(f"[sender] REFUSED: video sender not built: {a.video_bin} (make in its repo, log-031)", file=sys.stderr)
+            return 2
+        video = VideoToggle([a.video_bin, "--listen", f"0.0.0.0:{a.video_port}", "--device", a.video_device],
+                            log_path=os.path.splitext(log_path)[0] + "-video.log")
+        print(f"[sender] VIDEO ready: hold LEFT Y 1 s to start/stop the PICO video from {a.video_device}", flush=True)
     period, t_start, last_print = 1.0 / a.hz, time.monotonic(), 0.0
     try:
         while a.duration_s is None or time.monotonic() - t_start < a.duration_s:
@@ -388,6 +402,11 @@ def main(argv=None) -> int:
             fr = src.read()
             tr.update(fr)
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
+            if video is not None:
+                vev = video.update(bool(fr.controller("left").secondary), t0)
+                if vev:
+                    print(f"[video] {vev}", flush=True)
+                rec["video"] = video.on
             if enter.is_set():
                 enter.clear()
                 for ch in chans:
@@ -398,7 +417,8 @@ def main(argv=None) -> int:
                                   headset_facing_deg(fr.headset))
                 rec["arms"][ch.side] = {"state": "STOPPED" if ch.stopped else ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
-                                        "follower": ch.link.follower if ch.link else None}
+                                        "follower": ch.link.follower if ch.link else None,
+                                        "wall": ch.arm.wall}  # log-030: filter episodes recorded at a wall
                 if ev:
                     print(f"[{ch.side}] {ev}", flush=True)
             log.write(json.dumps(rec) + "\n")
@@ -432,9 +452,13 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("[sender] Ctrl-C: stopping; the receiver will hold the last pose", flush=True)
     finally:
+        if video is not None and video.on:
+            print(f"[video] {video.stop()}", flush=True)
         src.close()
         log.close()
         for ch in chans:
+            print(f"[{ch.side}] wall: {ch.arm.n_wall_cycles * ch.arm.dt:.1f} s at a wall, hand slip "
+                  f"{ch.arm.slip_m * 100:.0f} cm / {ch.arm.slip_deg:.0f} deg (log-030)", flush=True)
             if ch.link:
                 print(f"[{ch.side}] session={session} sent={ch.link.sent} dropped={ch.link.dropped} "
                       f"bad_echo={ch.link.bad_echo} foreign_echo={ch.link.foreign_echo}")

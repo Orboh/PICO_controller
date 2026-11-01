@@ -61,10 +61,10 @@ def test_hand_rotation_turns_the_gripper_the_same_way(side, axis):
     p0 = arm.kin.fk(arm.q).translation.copy()
     for i in range(1, 51):  # 20 deg over 1 s (rate limit 90 deg/s)
         out = arm.step(ADAPT(_c(axis, 20.0 * i / 50), True))
-        if out.state == FAULT and "of its limit" in out.event:
-            assert side == "left"  # left start pose: j1/j2 ~12 deg from their limits (log-017)
-            return
         assert out.state == ENGAGED, out.event
+        if arm.n_wall_cycles:      # log-030: a joint limit is now a WALL (left start pose: j2 near its limit)
+            assert side == "left"
+            return
     for _ in range(50):
         out = arm.step(ADAPT(_c(axis, 20.0), True))
     w = _tcp_rot_deg(arm)
@@ -111,8 +111,9 @@ def test_unreachable_rotation_faults():
         events.append(out.event or "")
         if out.state == FAULT:
             break
-    assert out.state == FAULT and any(k in out.event for k in ("rotation", "IK jumped", "posture", "singular",
-                                                               "session start", "of its limit"))
+    # log-030: the edge is a WALL now (arm holds, no FAULT); a real FAULT is still allowed
+    assert arm.n_wall_cycles > 0 or (out.state == FAULT and any(
+        k in out.event for k in ("rotation", "IK jumped", "singular")))
 
 
 def _c_rot(R_robot, delta=(0, 0, 0), grip=1.0):
@@ -211,14 +212,11 @@ def test_locked_arm_never_engages_and_reports_once_per_squeeze():
     assert sum(1 for e in events if e) == 1
 
 
-def test_session_drift_limit_refuses_and_faults():
+def test_session_drift_limit_is_a_wall():
     arm = _arm(orientation=False, max_session_drift_deg=20.0, j1_session_drift_deg=None)
     events = [arm.step(ADAPT(_c(delta=(0.0, 0.003 * i, 0.0)), True)).event for i in range(1, 300)]
-    assert any(e and "session start pose" in e for e in events)
-    arm.step(ADAPT(_c(grip=0.0), True))
-    out = arm.step(ADAPT(_c(), True))
-    if arm.state != ENGAGED:   # far from the start: engage refused
-        assert "session start pose" in (out.event or "")
+    assert any(e and e.startswith("WALL") and "session start" in e for e in events)
+    assert arm.state == ENGAGED and arm._worst_drift(arm.q)[1] <= 20.0 + 1e-6
 
 
 def test_joint1_has_its_own_drift_limit():
@@ -239,13 +237,13 @@ def test_joint1_has_its_own_drift_limit():
 
 def test_joint1_drift_limit_in_the_step_path():
     """Goldfish #6: the real per-cycle check. Pretend the session started 100 / 125 deg away on joint_1."""
-    for offset, should_fault in ((100.0, False), (125.0, True)):
+    for offset, should_wall in ((100.0, False), (125.0, True)):
         arm = _arm(orientation=False)
         arm.q_session = arm.q_session.copy()
         arm.q_session[0] -= np.deg2rad(offset)
         events = [arm.step(ADAPT(_c(delta=(0.0, 0.0, 0.0005 * i)), True)).event for i in range(1, 20)]
-        faulted = any(e and "joint_1 would be" in e and "session start" in e for e in events)
-        assert faulted == should_fault, (offset, events)
+        walled = any(e and "joint_1" in e and "session start" in e for e in events)
+        assert walled == should_wall, (offset, events)
 
 
 def test_orientation_follows_position_when_rotation_unreachable():
@@ -269,8 +267,9 @@ def test_rotation_gap_at_wrist_limit_faults_with_a_rotation_message():
         if out.state == FAULT:
             break
         w = np.linalg.norm(pin.log3(arm.kin.fk(arm.q).rotation @ arm.anchor_tcp_rot.T))
-    assert out.state == FAULT
-    assert any(k in out.event for k in ("wrist cannot reach", "ahead of the gripper", "IK jumped", "posture"))
+    # log-030: the posture/limit edge is a WALL now; otherwise the rotation-specific FAULT as before
+    assert arm.n_wall_cycles > 0 or (out.state == FAULT and any(
+        k in out.event for k in ("wrist cannot reach", "ahead of the gripper", "IK jumped")))
 
 
 @pytest.mark.parametrize("side", ["left", "right"])

@@ -179,10 +179,12 @@ def test_unreachable_faults():
     assert out.state == FAULT and out.action == held
 
 
-def test_posture_change_faults():
+def test_posture_change_is_a_wall():
+    """log-030: a large posture change in one squeeze holds the arm (WALL) instead of a FAULT."""
     arm = _engaged("right", max_posture_change_deg=10.0)
     events = [arm.step(_h(_c((0.0, 0.004 * i, -0.004 * i)))).event for i in range(200)]
-    assert any(e and "posture change" in e for e in events)
+    assert any(e and e.startswith("WALL") and "from where you squeezed" in e for e in events)
+    assert np.max(np.abs(np.rad2deg(arm.q - arm.anchor_q))) <= 10.0 + 1e-6
 
 
 def test_gripper_gentle_sync():

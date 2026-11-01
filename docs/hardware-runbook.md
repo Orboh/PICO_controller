@@ -80,7 +80,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | wearer squeezes before "ready" | call "release" | repeat R1 |
 | (with `--orientation`) the wrist turns while the hand's position is still | expected only if the wearer turned the hand (it may finish turning ~0.5 s later, 90°/s limit); otherwise call "release" | — |
 | (with `--orientation`) fingers or the flange swing toward the table or the arm | call "release" | if it does not stop: emergency stop |
-| `joint_N would be … deg from the session start pose` | call "FAULT" (arm frozen). joint_1 may swing up to **120°** from the start (other joints 90°): keep the area to the robot's left/front clear | wearer brings the hand back; a second one locks → stop the block |
+| `WALL: …` (log-030) | the arm stops at the workspace edge and **holds** (not a FAULT; it may still finish up to 10° of joint motion toward its last target). joint_1 may swing up to **120°** from the start: keep the area to the robot's left/front clear | nothing; the wearer moves back. A wall that holds for long, or the wearer keeps pushing: call "move back" |
 | `LOCKED` in the terminal | the sender refuses to engage until restarted (same FAULT twice in 30 s) | stop: release, `esc`, restart both (R2); log why it repeated |
 | anything unexpected | stop the session | log it before resuming |
 
@@ -115,7 +115,7 @@ Before: no leader_agent running (`pgrep -af leader_agent` empty), go/no-go incl.
   squeeze: turn → hold 2 s → turn back → release. Before each pitch: fingers ≥ 10 cm above the table; pitch last.
   **No 20° turns**: offline, 20° FAULTs on left pitch down, left yaw left, right pitch down, right yaw right
   (joint_2 / joint_7 within 3° of a limit; with `--orientation` the limit avoidance is not active).
-- Expected FAULTs (arm freezes, safe): `joint_N would come within … of its limit`, `hand turned … ahead of the
-  gripper` (turn slower), `wrist cannot reach that rotation`. Release; wait for "ready".
+- Expected at the edge: `WALL: …` (log-030; arm holds, not a FAULT: move back). Expected FAULTs (arm freezes,
+  safe): `hand turned … ahead of the gripper` (turn slower), `wrist cannot reach that rotation`. Release; "ready".
 - **Stop rules:** the same FAULT twice or `LOCKED` → stop the session; wrong direction → release, stop, log.
 - PASS is judged by the spotter's eye (no follower feedback); the log gives the commanded values only.

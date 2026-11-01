@@ -56,7 +56,10 @@ class TeleopConfig:
     ik_solve_tol_m: float = 1e-4       # IK iterates to this every cycle (smooth, no 5 mm staircase)
     ik_tol_m: float = 0.005            # accepted if the answer is within 5 mm, else "unreachable"
     ik_max_iter: int = 60
-    min_sigma: float = 0.03            # smallest singular value of the 3x7 position Jacobian
+    min_sigma: float = 0.03            # smallest singular value of the 3x7 position Jacobian: below it
+                                       # going deeper is a WALL (log-030), moving out is allowed
+    min_sigma_hard: float = 0.02       # below this: FAULT as before (Goldfish: keep a hard floor)
+    wall_quiet_s: float = 0.5          # a wall "contact" ends after this long without a blocked cycle
     max_ik_jump_deg: float = 5.0       # IK answer vs previous IK answer per cycle (TCP moves <= 5 mm)
     max_posture_change_deg: float = 60.0  # any joint this far from its value at engage -> FAULT
                                           # (45 -> 60 on 2026-10-31, Suraj: 45 tripped twice in normal
@@ -172,6 +175,12 @@ class ArmTeleop:
         self.anchor_tcp_rot: np.ndarray | None = None
         self.R_target: np.ndarray | None = None       # rate-limited gripper orientation target
         self.dt = 1.0 / self.cfg.hz
+        # WALL (log-030): at the workspace edge the target holds and the anchors slip (no FAULT, no lock)
+        self.wall: str | None = None       # current wall contact (None = free)
+        self.wall_last_t = -1e9            # session time of the last blocked cycle
+        self.n_wall_cycles = 0             # evidence: blocked cycles this session
+        self.slip_m = 0.0                  # evidence: total hand slip (m) and rotation slip (deg)
+        self.slip_deg = 0.0
 
     # ------------------------------------------------------------------------------------
     def action(self) -> dict[str, float]:
@@ -189,6 +198,55 @@ class ArmTeleop:
             lim[0] = cfg.j1_session_drift_deg
         i = int(np.argmax(drift - lim))
         return i + 1, float(drift[i]), float(lim[i])
+
+    def _edge(self, res) -> str | None:
+        """WALL check (log-030): why the new IK answer would go DEEPER into the workspace edge, else None.
+
+        Same numbers as the old FAULTs; only a move that makes it worse is blocked, so moving out works."""
+        cfg = self.cfg
+        if res.err_m > cfg.ik_tol_m:
+            return "target out of reach"
+        if res.sigma_min < cfg.min_sigma and res.sigma_min < self.kin.sigma_min(self.q_ik) - 1e-9:
+            return f"arm stretched (sigma {res.sigma_min:.3f} < {cfg.min_sigma})"
+        room_new = np.rad2deg(np.minimum(res.q - self.kin.lo, self.kin.hi - res.q))
+        room_now = np.rad2deg(np.minimum(self.q_ik - self.kin.lo, self.kin.hi - self.q_ik))
+        near = (room_new < cfg.limit_guard_deg) & (room_new < room_now - 1e-6)
+        if near.any():
+            return f"joint_{int(np.argmax(near)) + 1} at its limit"
+        lim = np.full(7, cfg.max_session_drift_deg)
+        if cfg.j1_session_drift_deg is not None:
+            lim[0] = cfg.j1_session_drift_deg
+        d_new = np.abs(np.rad2deg(res.q - self.q_session))
+        d_now = np.abs(np.rad2deg(self.q_ik - self.q_session))
+        far = (d_new > lim) & (d_new > d_now + 1e-6)
+        if far.any():
+            j = int(np.argmax(far))
+            return f"joint_{j + 1} {lim[j]:.0f} deg from the session start"
+        p_new = np.abs(np.rad2deg(res.q - self.anchor_q))
+        p_now = np.abs(np.rad2deg(self.q_ik - self.anchor_q))
+        big = (p_new > cfg.max_posture_change_deg) & (p_new > p_now + 1e-6)
+        if big.any():
+            return f"joint_{int(np.argmax(big)) + 1} {cfg.max_posture_change_deg:.0f} deg from where you squeezed"
+        return None
+
+    def _hit_wall(self, why: str, h: HandInput) -> str | None:
+        """Hold the target and slip the anchors so the hand's pose maps onto the held target; message once."""
+        cfg = self.cfg
+        new_anchor = h.pos - (self.p_target - self.anchor_tcp) / cfg.scale
+        self.slip_m += float(np.linalg.norm(new_anchor - self.anchor_hand))
+        self.anchor_hand = new_anchor
+        # Rotation slip only when the rotation is followed (not in the position-only fallback: there the
+        # gap timer must keep running, Elephant log-030 #1).
+        if (cfg.orientation and h.rot is not None and self.anchor_hand_rot is not None
+                and self.rot_gap_since is None and self.R_target is not None):
+            new_rot = self.anchor_tcp_rot @ self.R_target.T @ h.rot
+            self.slip_deg += math.degrees(float(np.linalg.norm(pin.log3(new_rot @ self.anchor_hand_rot.T))))
+            self.anchor_hand_rot = new_rot
+        self.n_wall_cycles += 1
+        self.wall_last_t = self.n_steps * self.dt
+        first = self.wall is None
+        self.wall = why
+        return f"WALL: {why}: the arm stops here, move back (not a FAULT)" if first else None
 
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
@@ -336,7 +394,7 @@ class ArmTeleop:
             return self._fault(f"hand is {lag_m * 100:.0f} cm ahead of the arm target "
                                f"(> {cfg.max_target_lag_m * 100:.0f}): move slower")
         # follow
-        err, sigma = 0.0, math.nan
+        err, sigma, event = 0.0, math.nan, None
         lag = float(np.max(np.abs(np.rad2deg(self.q_ik - self.q))))
         if lag <= cfg.max_lag_deg:  # otherwise the target waits while the joints catch up
             p_des = self.anchor_tcp + cfg.scale * (h.pos - self.anchor_hand)
@@ -380,32 +438,21 @@ class ArmTeleop:
             else:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
-            if res.err_m > cfg.ik_tol_m:
-                return self._fault(f"IK did not converge ({res.err_m * 1000:.1f} mm): target unreachable")
-            if res.sigma_min < cfg.min_sigma:
-                return self._fault(f"near singular (sigma {res.sigma_min:.3f} < {cfg.min_sigma})")
-            jump = float(np.max(np.abs(np.rad2deg(res.q - self.q_ik))))
-            if jump > cfg.max_ik_jump_deg:
-                return self._fault(f"IK jumped {jump:.1f} deg in one cycle (> {cfg.max_ik_jump_deg})")
-            room_new = np.rad2deg(np.minimum(res.q - self.kin.lo, self.kin.hi - res.q))
-            room_now = np.rad2deg(np.minimum(self.q_ik - self.kin.lo, self.kin.hi - self.q_ik))
-            near = (room_new < cfg.limit_guard_deg) & (room_new < room_now - 1e-6)
-            if near.any():
-                j = int(np.argmax(near)) + 1
-                return self._fault(f"joint_{j} would come within {room_new[j - 1]:.1f} deg of its limit "
-                                   f"(< {cfg.limit_guard_deg:.0f}): move back")
-            j, drift, lim = self._worst_drift(res.q)
-            if drift > lim:
-                return self._fault(f"joint_{j} would be {drift:.0f} deg from the session start pose "
-                                   f"(> {lim:.0f}): bring the hand back")
-            posture = np.abs(np.rad2deg(res.q - self.anchor_q))
-            if posture.max() > cfg.max_posture_change_deg:
-                j = int(posture.argmax()) + 1
-                return self._fault(f"joint_{j} would move {posture.max():.0f} deg from where you engaged "
-                                   f"(> {cfg.max_posture_change_deg:.0f}): large posture change")
-            self.p_target, self.q_ik, err, sigma = p_tgt, res.q, res.err_m, res.sigma_min
-            if R_tgt is not None:
-                self.R_target = R_tgt
+            if res.sigma_min < cfg.min_sigma_hard:
+                return self._fault(f"near singular (sigma {res.sigma_min:.3f} < {cfg.min_sigma_hard})")
+            blocked = self._edge(res)
+            if blocked is None:
+                jump = float(np.max(np.abs(np.rad2deg(res.q - self.q_ik))))
+                if jump > cfg.max_ik_jump_deg:
+                    return self._fault(f"IK jumped {jump:.1f} deg in one cycle (> {cfg.max_ik_jump_deg})")
+                self.p_target, self.q_ik, err, sigma = p_tgt, res.q, res.err_m, res.sigma_min
+                if R_tgt is not None:
+                    self.R_target = R_tgt
+            else:
+                event = self._hit_wall(blocked, h)
+        t_now = self.n_steps * self.dt
+        if self.wall is not None and t_now - self.wall_last_t > cfg.wall_quiet_s:
+            self.wall = None
         qlim = math.radians(cfg.max_joint_speed_dps) * self.dt
         self.q = self.kin.clamp(self.q + np.clip(self.q_ik - self.q, -qlim, qlim))
 
@@ -418,4 +465,4 @@ class ArmTeleop:
         speed = cfg.max_gripper_speed_dps if self.grip_synced else cfg.gripper_sync_dps
         glim = speed * self.dt
         self.gripper += float(np.clip(g_des - self.gripper, -glim, glim))
-        return self._out(None, err, sigma)
+        return self._out(event, err, sigma)

@@ -37,3 +37,5 @@ Rules for this folder:
 | [log-027.md](log-027.md) | W1 left wrist: yaw OK; roll/pitch hit joint_6 at the start pose → LOCKED; room per direction (10 cm forward is best); W1b from forward: roll ±38°, pitch ±15° commanded 1:1, 0 FAULTs. |
 | [log-028.md](log-028.md) | Pre-move for wrist tests: Enter in terminal A moves the arm 10 cm forward at 10°/s with the same gripper rotation (`premove_forward`, `PREMOVE_CM`); path never below the start height; 104 tests; not yet on the arm. |
 | [log-029.md](log-029.md) | R1 right arm, position only (Kento-san / Suraj): 13 squeezes, 0 FAULTs, all commanded directions right; "no roll" = position mode by design → R2 wrist with pre-move. |
+| [log-030.md](log-030.md) | WALL instead of FAULT at the workspace edge (limit, stretched arm, drift, posture, out of reach): target holds, hand slips, no lock; hard singular floor; reviewed first; 114 tests; replays: locked wrist runs → 0 FAULTs, session 4 no creep. |
+| [log-031.md](log-031.md) | PICO video (FPV) pipeline: OrinVideoSender built, hold LEFT Y 1 s = on/off inside the sender; kept but not used (Wi-Fi load). |
