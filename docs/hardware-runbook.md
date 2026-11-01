@@ -10,18 +10,18 @@ Source rules: `notion/OpenArm 安全プロトコル…md` (archived copy), Kento
 If anything surprises anyone: **stop** (spotter card below).
 
 ## Go / no-go — fill a NEW dated column every session day (all PASS, else no session)
-| # | Item | Pass condition | Kind | Owner | 2026-10-31 |
-|---|---|---|---|---|---|
-| 1 | Gate 1 live | `GATE 1 … PASS` on record (log-007) | one-time per headset/app version | Suraj | PASS |
-| 2 | Axis signs, no arm | dry-run table in README; plus the 2 cm one-axis check on the arm (step 6) | one-time per code change in `frames.py` | Suraj | PASS (left "left" row to redo cleanly) |
-| 3 | Emergency stop | located, pointed at, **pressed once with the arm off**, within the spotter's reach | **daily** | spotter (name) | done, Kento-san + Suraj (not "pressed once" on record) |
-| 4 | PSU switches | which switch = which arm, labelled, reachable by the spotter | **daily** | spotter (name) | done |
-| 5 | Arm and side | left arm only until the right arm's zero/sign is checked | per plan | Suraj + Kento | left |
-| 6 | Start pose and checkout | sender prints the start-pose sha = `sha256sum` of the follower's file; follower checkout branch + commit as above (or a newer one Kento names) | **daily** | Suraj | PASS (sha 2ec31fb82bf0) |
-| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count |
-| 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done |
-| 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted |
-| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | PASS 2026-10-31 (log-016) |
+| # | Item | Pass condition | Kind | Owner | 2026-10-31 | 2026-11-01 |
+|---|---|---|---|---|---|---|
+| 1 | Gate 1 live | `GATE 1 … PASS` on record (log-007) | one-time per headset/app version | Suraj | PASS | PASS (log-007; input today 60 Hz, L ok, R ok) |
+| 2 | Axis signs, no arm | dry-run table in README; plus the 2 cm one-axis check on the arm (step 6) | one-time per code change in `frames.py` | Suraj | PASS (left "left" row to redo cleanly) | PASS (no change in `frames.py`) |
+| 3 | Emergency stop | located, pointed at, **pressed once with the arm off**, within the spotter's reach | **daily** | spotter (name) | done, Kento-san + Suraj (not "pressed once" on record) | PASS (spotter Suraj) |
+| 4 | PSU switches | which switch = which arm, labelled, reachable by the spotter | **daily** | spotter (name) | done | PASS (spotter Suraj) |
+| 5 | Arm and side | left arm only until the right arm's zero/sign is checked | per plan | Suraj + Kento | left | left; right approved by Kota-san 2026-11-01 for R1 (position 2 cm checks), then R2 (wrist) |
+| 6 | Start pose and checkout | sender prints the start-pose sha = `sha256sum` of the follower's file; follower checkout branch + commit as above (or a newer one Kento names) | **daily** | Suraj | PASS (sha 2ec31fb82bf0) | PASS left sha 2ec31fb82bf0; **right sha a3b97b8e9d66** (start j1 −59.6, j4 87.2, j7 66.7); openarm-orboh `feat/takeei-wood-l1` @ e98e987 |
+| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count | PASS: Kota-san OK in person on 2026-11-01 for the 120° joint_1 limit (relayed by Suraj; no written record yet) |
+| 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done | PASS (spotter Suraj; area left/front clear for a 120° shoulder swing) |
+| 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted | 0.1025 accepted |
+| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | PASS 2026-10-31 (log-016) | **pending: redo** (controller.py changed since log-016: commits 50360c9, d809f38); headset-only dry run both arms before W1 |
 
 ## Roles
 - **Spotter**: beside the arm, hand on the emergency stop, status terminal turned toward them.
@@ -98,3 +98,24 @@ Before: today's go/no-go column filled; the arm's sweep area clear for a joint_1
 6. **Stop rules:** the first `LOCKED` → stop the block (`esc`, PSU off, Ctrl-C terminal A), log why.
    Anything unexpected → e-stop. Never continue without the spotter's "ready".
 7. After: PSU off; log-NNN with per-episode result, FAULTs, smallest margin to the joint_1 limit.
+
+## One-arm sessions without recording: R1 position, W1 / R2 wrist (log-026)
+Script: `bash ~/projects/PICO-controller/scripts/arm_session.sh <left|right> <position|wrist>`.
+It shows the `[sender]` start-pose line: check the sha (left `2ec31fb82bf0`, right `a3b97b8e9d66`).
+| | left | right |
+|---|---|---|
+| power supply | left PSU | **right PSU** |
+| CAN | `can_fol_l` | `can_fol_r` |
+| follower (terminal B) | `cd ~/projects/openarm-orboh && bash scripts/run_teleop_remote_left.sh` | `… run_teleop_remote_right.sh` (port 5701/5711) |
+| start pose | j1 +64.4, j4 95.9, j7 −68.8 | j1 −59.6, j4 87.2, j7 66.7 |
+Before: no leader_agent running (`pgrep -af leader_agent` empty), go/no-go incl. item 10 PASS today.
+- **R1 (right, position):** 2 cm forward → release; 2 cm left → release; 2 cm up → release. Spotter calls each.
+  PASS = every direction right by eye; any wrong direction or motion without a squeeze → e-stop, stop, log.
+- **W1 / R2 (wrist):** first a 2 cm forward squeeze; then yaw, pitch, roll **10° only**, slowly, one per
+  squeeze: turn → hold 2 s → turn back → release. Before each pitch: fingers ≥ 10 cm above the table; pitch last.
+  **No 20° turns**: offline, 20° FAULTs on left pitch down, left yaw left, right pitch down, right yaw right
+  (joint_2 / joint_7 within 3° of a limit; with `--orientation` the limit avoidance is not active).
+- Expected FAULTs (arm freezes, safe): `joint_N would come within … of its limit`, `hand turned … ahead of the
+  gripper` (turn slower), `wrist cannot reach that rotation`. Release; wait for "ready".
+- **Stop rules:** the same FAULT twice or `LOCKED` → stop the session; wrong direction → release, stop, log.
+- PASS is judged by the spotter's eye (no follower feedback); the log gives the commanded values only.
