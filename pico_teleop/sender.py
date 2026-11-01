@@ -165,6 +165,8 @@ class ArmChannel:
             return f"pre-move refused: arm is {self.arm.state} (release the grip; wait for other moves)"
         if self.link is not None and self.link_state(now) != "ok":
             return "pre-move refused: follower not linked"
+        if np.max(np.abs(np.rad2deg(self.arm.q - self.arm.q_session))) > 1.0:
+            return "pre-move refused: only from the start pose (it would add up with each press; log-045)"
         kin = self.arm.kin
         M = kin.fk(self.arm.q)
         res, rot_err = kin.solve_pose(M.translation + np.array([fwd_m, 0.0, 0.0]), M.rotation, self.arm.q)

@@ -46,8 +46,10 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
 ## Connect the PICO (every day, before ①)
 1. **Network — PC and headset on the same network**, one of:
    - Wi-Fi **`orboh`** (`nmcli dev wifi connect orboh` on the PC; on the headset: Settings → Wi-Fi → `orboh`), or
-   - **Kota-san's mobile tethering (hotspot)**: PC and headset both join the phone's hotspot. Addresses are then not
-     192.168.0.x: start the page with `PICO_HEADSET_IP=<headset ip> bash scripts/gui.sh` so the checks ping the right one.
+   - **Kota-san's mobile tethering (hotspot)**: PC and headset both join the phone's hotspot (its name is the phone's
+     hotspot name). Addresses are then not 192.168.0.x: start the page with `PICO_HEADSET_IP=<headset ip> bash
+     scripts/gui.sh`; the page checks "same network as the headset" and pings it (it does not check the network's
+     name). The PICO input rate over tethering has **not been measured yet**: do the input test first.
    PC address: `ip -4 -br addr show wlp0s20f3` (the Wi-Fi interface; ignore docker / VPN addresses).
 2. **PC Service** running on the PC (card 0 shows it; start command in "Working setup for PICO").
 3. **In the headset, open the XRoboToolkit app** (Library → Unknown sources → XRoboToolkit) and check its panel, part by part:
@@ -71,12 +73,15 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
    leader: leader arm CAN up; both: follower CAN up, cameras (button), today's go/no-go all PASS, no other sender.
    Red items show what to do. Fix them before ①.
 - **Card 1 — Setup**: method (PICO → follower / Leader arm → follower), arm (**left / right / both**), **stage**, episodes,
-   seconds, operator name, task (same text for both methods), **scene** (gate/session, one arm: an openarm-orboh
+   seconds, operator name, task (same text for both methods; hidden for both arms: the task file's TASK is used), **scene** (gate/session, one arm: an openarm-orboh
    `scenes/<name>.yaml`); PICO: smooth motion (on), wrist rotation, pre-move.
    - **Both arms**: with the leader arms only. The page runs the team's `collect_bimanual.sh <dry|gate|session> [tag] [n]`
      exactly like the Collect tab (its task file `config/bimanual-collect.kitakyushu_takeei_sort.env`, its dataset names,
      its 4-CAN check); ① only prepares (no leader agent: the recorder reads both leader arms itself). A session needs a
-     tag (e.g. `s2`). **Both arms with the PICO is not possible yet** (lerobot has no two-arm remote receiver).
+     tag (e.g. `s2`); seconds 0 = the task file's length (120 s for sorting). **Both arms with the PICO is not possible
+     yet** (lerobot has no two-arm remote receiver).
+   - **Smooth motion** is on by default on the page (the terminal sender's default is off). The settings are saved in
+     the notes file of each run; do not mix settings inside one comparison block.
    - **dry** = 2 throw-away episodes to check everything (dataset `…_tmp`);
    - **gate** = 10 episodes for review (dataset `Orboh/openarm_<method>_<arm>_gate` + the recorder's
      `_YYYYmmdd_HHMMSS`); **only a complete gate** (recorder exit 0 and all episodes saved) shows the **Gate review**
@@ -86,16 +91,25 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
    ① Start teleop → ② spotter name (**must differ from the operator**) + "arm may move, power ON": the spotter switches
    the arm's power on now; if the follower CAN card is red afterwards, run `cd ~/projects/openarm-orboh && sudo bash
    scripts/canup.sh` → ③ Start recording (**refused while a CAN link is down; the arm moves** to the start pose) → ▶ Next episode / ↺ Discard + re-record / ⟲ Return to start (arm moves) / ■ End recording (**not an
-   e-stop**) → ④ Stop teleop. One recording per ①; for another, ④ then ① again.
+   e-stop**; the arm returns and **goes limp — the spotter supports it or keeps clear**) → ④ Stop teleop. One recording
+   per ①; for another, ④ then ① again. Operating the controllers (grip, trigger, gripper, buttons): see "Working setup
+   for PICO" → "How to operate".
    - **Live status** (PICO): HOLD / ENGAGED / FAULT / LOCKED, link, input rate, facing, BOUNDARY (wall) and its time,
      start-pose sha; recording episode and its time.
    - **Episodes**: grasp / placed / note and boundary time, saved at once to `runs/gui-<method>-<arm>-<time>-notes.json`
      (with settings, spotter, run folder, dataset).
 - **Logs**: session log, recorder output, teleop events.
 
+## What the page does NOT protect against
+It is not an emergency stop. It does not see the arm's real position (only what is sent), collisions between the two arms,
+with the table or with people, a wrong object or scene, or a tired operator. It trusts the spotter's ② and today's
+go/no-go column. The spotter's eyes, e-stop and power switch cover all of this.
+
 ## What the page refuses (on purpose)
-Start without an operator name, with go/no-go not all PASS, or with another sender running; a session without a
-reviewed gate; recording before ②; a wrong start pose; End / Return / Discard while the operator squeezes; Next after
+Start without an operator name, with go/no-go not all PASS or item 5 not saying `collect: <arm>`, or with another
+sender running; a gate with fewer than 10 episodes; a session without a reviewed complete gate (same method, arm, task);
+recording before ②, without a camera check in the last 10 minutes, or with a CAN link down; a wrong start pose;
+a second pre-move away from the start pose; End / Return / Discard while the operator squeezes; Next after
 LOCKED; for the leader arm: End / Return / ④ without "the leader arm is held".
 
 ## Did it save?
@@ -109,10 +123,10 @@ says **"NO EPISODE WAS SAVED"** otherwise. A dry run passes only with all episod
 | red banner "ANOTHER SENDER … E-STOP" | e-stop first, then find the other program |
 | red banner "TELEOP / RECORDER EXITED" | spotter watches the arm; release; End recording; the episode is flagged |
 | LOCKED | release → End recording → ④ → ① again |
-| red banner "RECORDER FAILED: …" (e.g. CAN "Network is down") | the arm did not move; fix the cause (card 0), then **Abort recorder** (appears) → ④ |
+| red banner "RECORDER FAILED: …" (e.g. CAN "Network is down") | spotter watches the arm (it may already have moved to the start pose, e.g. both arms fail after lining up); fix the cause (card 0), spotter supports the arm or switches it off, then **Abort recorder** (appears) → ④ |
 | End recording pressed, recorder still running after 60 s | spotter turns the arm off or supports it (Ctrl-C makes a powered follower go limp) → **Abort recorder**; fallback in a terminal: `pkill -INT -f lerobot-record` |
 | FAULT in live status | the arm **holds** (frozen target); release, wait for "ready", squeeze again |
-| teleop stopped (④ / Ctrl-C of the PICO sender) | the receiver **holds** the last pose; End recording returns the arm to the start pose and it **goes limp** |
+| teleop stopped (④ / Ctrl-C of the PICO sender) | the receiver **holds** the last pose; End recording returns the arm to the start pose and it **goes limp**: the spotter **supports the arm or keeps clear** |
 | a connection turns red | stop the episode (End recording), fix it (the card says how), start again from ① |
 | closing the page / Ctrl-C of `gui.sh` | the page sends Esc to the recorder (may not end, see above) and stops a PICO sender; a **leader agent keeps running**: the leader operator holds the leader arm, then `pkill -INT -f run_leader_agent` |
 

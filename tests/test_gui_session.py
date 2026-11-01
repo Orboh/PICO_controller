@@ -60,6 +60,7 @@ def _ready(s, method="pico"):
     s.start_teleop(Options(method=method, **OPS))
     assert _wait(lambda: s.sha_line()[1]) or method == "leader"
     s.confirm_power("Suraj")
+    s.cameras_ok_at = time.monotonic()
     s.start_recorder()
     assert _wait(lambda: s.episode == 0)
 
@@ -95,6 +96,9 @@ def test_order_and_one_recorder_per_teleop(sess):
     with pytest.raises(SessionError, match="spotter's name"):
         sess.confirm_power("")
     sess.confirm_power("Suraj")
+    with pytest.raises(SessionError, match="cameras"):
+        sess.start_recorder()
+    sess.cameras_ok_at = time.monotonic()
     sess.start_recorder()
     assert _wait(lambda: sess.episode == 0 and sess.recording_now)
     sess.key("next")
@@ -117,6 +121,7 @@ def test_wrong_start_pose_sha_blocks_the_recorder(tmp_path):
     s.start_teleop(Options(**OPS))
     assert _wait(lambda: s.sha_line()[0] is not None)
     s.confirm_power("Suraj")
+    s.cameras_ok_at = time.monotonic()
     with pytest.raises(SessionError, match="sha"):
         s.start_recorder()
     s.teleop.proc.kill()
@@ -204,19 +209,24 @@ def test_recorder_patterns_match_the_real_console_log():
 def test_go_no_go_parse(tmp_path):
     rb = tmp_path / "rb.md"
     rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 3 | e | f | FAIL: no e-stop |\n"
-                  "| 5 | arm | c | left |\n")
+                  "| 5 | arm | c | collect: left |\n")
     ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 2))
     assert not ok and "3" in why
-    rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 5 | arm | c | left |\n")
+    rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 5 | arm | c | collect: left; right for R1 checks |\n")
     assert gs.go_no_go_today(rb, dt.date(2026, 11, 2), side="left")[0]
     ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 2), side="right")
-    assert not ok and "item 5" in why
+    assert not ok and "item 5" in why                  # "right" outside the collect: token does not count
+    ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 2), side="both")
+    assert not ok
     assert "no go/no-go column" in gs.go_no_go_today(rb, dt.date(2026, 11, 3))[1]
 
 
 def test_go_no_go_real_runbook_today_parses():
+    """11-01: item 5 allows only `collect: left`; items 7 and 10 are pending (log-045), so the page refuses."""
     ok, why = gs.go_no_go_today(today=dt.date(2026, 11, 1), side="left")
-    assert ok, why
+    assert not ok and "7" in why and "10" in why
+    ok, why = gs.go_no_go_today(today=dt.date(2026, 11, 1), side="both")
+    assert not ok
 
 
 def test_notes_are_saved(sess):
@@ -267,10 +277,12 @@ def test_spotter_differs_can_down_and_stuck_recorder(tmp_path):
     with pytest.raises(SessionError, match="different person"):
         s.confirm_power("kento")
     s.confirm_power("Suraj")
+    s.cameras_ok_at = time.monotonic()
     with pytest.raises(SessionError, match="CAN link down"):
         s.start_recorder()
     s.links = lambda m, side: []
     s.recorder_used = False
+    s.cameras_ok_at = time.monotonic()
     s.start_recorder()
     s._recorder_line("ConnectionError: Failed to connect to CAN bus: Network is down")
     assert s.recorder_stuck() and "RECORDER FAILED" in s.alarm
@@ -330,6 +342,8 @@ def test_only_a_complete_gate_is_reviewed_and_a_new_gate_clears_the_ok(tmp_path)
     """Elephant 11-01 #1: exit 0 and all episodes saved, else no review; a new gate cancels the old OK."""
     rev = tmp_path / "rev.json"
     s = _sess(tmp_path, reviews=rev)
+    with pytest.raises(SessionError, match="at least 10"):
+        s.start_teleop(Options(stage="gate", episodes=1, scene="kitakyushu-takeei-v1", **OPS))
     s.opts = Options(stage="gate", episodes=10, **OPS)
     s.tag, s.run_dir = "t", str(tmp_path)
     (tmp_path / "manifest.json").write_text(json.dumps({"artifacts": {"episodes_recorded": 0, "dataset_root": "/d"}}))
@@ -347,7 +361,7 @@ def test_only_a_complete_gate_is_reviewed_and_a_new_gate_clears_the_ok(tmp_path)
     s.record_review("Kota")
     assert s.gate_ok("pico", "left") and "pending" not in json.loads(rev.read_text())
     s2 = _sess(tmp_path, reviews=rev)
-    s2.start_teleop(Options(stage="gate", scene="kitakyushu-takeei-v1", **OPS))
+    s2.start_teleop(Options(stage="gate", episodes=10, scene="kitakyushu-takeei-v1", **OPS))
     assert s2.gate_ok("pico", "left") is None
     s2.teleop.proc.kill()
 

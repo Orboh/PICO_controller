@@ -155,7 +155,9 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                 async def test_cams():
                     if sess.recorder_running:
                         return
-                    board.slow["chk.cameras"] = (time.monotonic(), await run.io_bound(checks.cameras, o.side))
+                    res = await run.io_bound(checks.cameras, o.side)
+                    board.slow["chk.cameras"] = (time.monotonic(), res)
+                    sess.cameras_ok_at = time.monotonic() if res.ok else None
                     seen["chk"] = None
                 with ui.row():
                     b_tin = tx(ui.button(on_click=test_input).props("outline"), "test_input")
@@ -181,9 +183,9 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                 scene_in = tx(ui.select(["none"] + scenes, value="none").bind_value(o, "scene").classes("w-72"), "scene", "label")
                 with ui.row().classes("w-full"):
                     tx(ui.number(value=2, min=1, max=50, precision=0).bind_value(o, "episodes", forward=lambda v: int(v or 1)).classes("w-28"), "episodes", "label")
-                    tx(ui.number(value=30, min=5, max=300, precision=0).bind_value(o, "episode_time_s", forward=lambda v: int(v or 30)).classes("w-28"), "seconds", "label")
+                    tx(ui.number(value=30, min=0, max=300, precision=0).bind_value(o, "episode_time_s", forward=lambda v: int(v or 0)).classes("w-28"), "seconds", "label")
                 tx(ui.input().bind_value(o, "operator").classes("w-full"), "operator", "label")
-                tx(ui.input().bind_value(o, "task").classes("w-full"), "task", "label")
+                task_in = tx(ui.input().bind_value(o, "task").classes("w-full"), "task", "label")
                 with ui.column().classes("w-full").bind_visibility_from(o, "method", value="pico"):
                     tx(ui.switch(value=True).bind_value(o, "smooth"), "smooth")
                     tx(ui.switch(value=False).bind_value(o, "wrist"), "wrist")
@@ -348,6 +350,11 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
             st_toggle.value = o.stage
         both_note.text = (L("both.pico") if o.method == "pico" else L("both.leader")) if o.side == "both" else ""
         tag_in.set_visibility(o.side == "both" and o.method == "leader" and o.stage == "session")
+        task_in.set_visibility(not (o.side == "both" and o.method == "leader"))   # both arms: the task file's TASK
+        both_l = o.side == "both" and o.method == "leader"
+        if both_l != seen.get("both_l") and not sess.running:   # both arms: 0 s = the task file's EPISODE_TIME_S (120 s)
+            seen["both_l"] = both_l
+            o.episode_time_s = 0 if both_l else (30 if o.episode_time_s == 0 else o.episode_time_s)
         scene_in.set_visibility(not (o.side == "both" and o.method == "leader") and o.stage != "dry")
         stage_help.text = L(f"stage.{o.stage}") + ("" if o.stage != "session" else
                                                    ("  ✅ gate OK: " + sess.gate_ok(o.method, o.side)["reviewer"]) if sess.gate_ok(o.method, o.side)

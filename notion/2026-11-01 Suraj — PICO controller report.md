@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `1508dd1`, not pushed) · Logs `log/log-025` … `log-043`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest commit on `v13-collection-gui` (see git log), not pushed) · Logs `log/log-025` … `log-045`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -8,7 +8,7 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 - **Fix: the "wall".** At the edge the arm now stops and holds, the hand slips, moving back works at once; no FAULT, no lock. **Verified on the robot (left arm): 94 wall contacts in 7 minutes, no lock.**
 - **PICO episodes were jerkier than leader episodes**, mainly because the sender (50 Hz) and the recorder (30 fps) run at different rates. Fix (60 Hz + ease in/out) **confirmed on the robot: jerk −45 %, now as smooth as the leader episodes.**
 - **Video (FPV) pipeline with an on/off button on the controller**: built, **not used** for now (Wi-Fi load).
-- **Collection website (new)**: one page for both methods (leader arm or PICO) instead of two terminals: connection checks with notifications, the dry → gate → session stages with the reviewer's OK (as in the Dream-Lab Collect tab), the runbook's order and refusals, live status, episode notes, English / 日本語. Built and checked; **not yet used on the robot**. Guides: "Working setup for PICO" and "Collection website — setup and operation" (new pages).
+- **Collection website (new)**: one page for both methods (leader arm or PICO) instead of two terminals: connection checks with notifications, the dry → gate → session stages with the reviewer's OK (as in the Dream-Lab Collect tab), the runbook's order and refusals, live status, episode notes, English / 日本語. Built and checked offline; on the robot it has driven the PICO link and once moved a powered follower to its start pose, but has **not yet recorded a saved episode**. Guides: "Working setup for PICO" and "Collection website — setup and operation" (new pages).
 - **Direction**: the PICO now moves the **follower** arm (tested); a new mode where the PICO moves the **leader** arm is planned.
 - End-of-day check of the code: 4 fixes applied (§3).
 
@@ -20,9 +20,9 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 | W1b wrist | left | Kota-san / Suraj | roll and pitch from 10 cm forward | roll ±38°, pitch ±15°, **0 FAULTs** | log-027 |
 | R1 position | **right (first time)** | Kento-san / Suraj | forward, left, right, up, down | 13 squeezes, **0 FAULTs**, all directions right | log-029 |
 | R2 wrist | right | Kento-san / Suraj | roll and pitch | roll left OK; roll right hit joint_2 → **LOCKED**; pitch not reached | log-029 |
-| Wall check 1 | left | — / Suraj | push into the edges | 5 walls, none FAULTed; locked from the wrist-turning side → fixed | log-033 |
-| Wall check 2 | left | — / Suraj | push into the edges for 7 min | **PASS: 63 squeezes, 94 walls, 1 real tracking FAULT, no lock** | log-034 |
-| Smoothing test | left | — / Suraj | PICO episodes with 60 Hz + ease in/out | jerk 24.9 k (−45 %), as smooth as the leader; then **LOCKED** on link losses while the recorder saved → fixed | log-037 |
+| Wall check 1 | left | operator not recorded / Suraj | push into the edges | 5 walls, none FAULTed; locked from the wrist-turning side → fixed | log-033 |
+| Wall check 2 | left | operator not recorded / Suraj | push into the edges for 7 min | **PASS: 63 squeezes, 94 walls, 1 real tracking FAULT, no lock** | log-034 |
+| Smoothing test | left | operator not recorded / Suraj | PICO episodes with 60 Hz + ease in/out | jerk 24.9 k (−45 %; one robot episode vs. the leader episodes' 27–39 k); then **LOCKED** on link losses while the recorder saved → fixed | log-037 |
 | Wall check right | right | Kento-san / Suraj | joint limit, reach forward, re-squeeze, fast wrist turn | **PASS: 25 squeezes, 55 walls, no lock** (only FAULT: link lost because `esc` was pressed while still squeezing) | log-036 |
 
 Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall behaviour). **To do: a written OK in Slack.**
@@ -59,7 +59,7 @@ The limit numbers measured on the robot are the values **sent** to the arm (no f
 
 ### The wall (log-030, log-033)
 - These edges no longer FAULT; the arm **holds**: joint within 3° of its limit, arm stretched, joint past its session drift limit (120° joint_1 / 90°), joint > 60° from where you squeezed, target out of reach, a big joint jump (never sent), wrist turned faster than the gripper (extra turn dropped), a move that would tilt the gripper away from the hand. Only a move that goes **deeper** is held; moving out or sideways works; the hand "slips".
-- Still FAULTs (something is wrong): lost or jumping tracking, hand far ahead of the arm, link loss, a move deeper below the hard stretched-arm floor. The lock after repeated FAULTs is unchanged.
+- Still FAULTs (something is wrong): lost or jumping tracking, hand far ahead of the arm, link loss. (A hard stretched-arm floor stays as a backstop; the stretched-arm wall stops first, so it is not reached in normal use.) The lock after repeated FAULTs is unchanged.
 - The operator cannot see the wall message in the headset (no controller vibration in the SDK) → **the spotter calls "wall, move back"** (runbook).
 - Wall time and hand slip are logged per cycle (`wall` in the sender log) and printed at the end, to mark episodes recorded against a wall.
 - Deferred: joint-limit steering in wrist mode. Finding from wall check 2: **joint_2 is the most common wall on the left arm** (43 of 94): the left start pose leaves it little room → Kento's start pose, or steering in wrist mode.
@@ -84,7 +84,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | **60 Hz + 300°/s²** | **22.5 k (−44 %)** | **22 k (−66 %)** | ~1° (95 %) |
 | leader episodes | 27–39 k | | |
 - With ease in/out a joint can end up to 0.5° inside the 3° guard (never closer than 2.5°).
-- **Robot (log-037):** PICO 60 Hz + 300°/s² episode: jerk 24.9 k (−45 %), step doubling 17 % (50 Hz: 61–63 %, leader: 12–17 %).
+- **Robot (log-037):** PICO 60 Hz + 300°/s² episode: jerk 24.9 k (−45 %), step doubling 17 % (50 Hz: 61–63 %, leader: 12–17 %). Jerk = mean absolute 3rd difference of the joint angles over moving frames, summed over the 7 joints, in thousands of °/s³; one robot episode, so a first indication.
 
 ### Findings at the end of the day (log-035)
 | Problem found | Fix |
@@ -138,7 +138,7 @@ Kota-san gave these three OKs **in person on 2026-11-01** during the supervised 
 ### Collection website (log-038 … log-040)
 | Part | What it does |
 | --- | --- |
-| 0 Before you start | PICO: PC on Wi-Fi `orboh`, PC Service, 3D demo closed, headset answers, PICO input test; leader arm CAN; follower CAN; cameras; today's go/no-go; no other sender. Red items say how to fix; a toast when a connection is lost or back |
+| 0 Before you start | PICO: PC on the headset's network (Wi-Fi `orboh` or Kota-san's tethering), PC Service, 3D demo closed, headset answers, PICO input test; leader arm CAN; follower CAN; cameras; today's go/no-go; no other sender. Red items say how to fix; a toast when a connection is lost or back |
 | 1 Setup | PICO → follower / leader arm → follower, arm, **stage** (dry 2 / gate 10 / session), episodes, operator name, task; PICO: smooth motion, wrist rotation, pre-move |
 | 2 Run | ① teleop → ② spotter name + "arm may move" → ③ recording → ▶ / ↺ / ⟲ / ■ End (not an e-stop) → ④; one recording per ①; refuses unsafe orders (R2, R4, LOCKED, wrong start pose, no reviewed gate) |
 | Live status, episodes, logs | sender state, boundary time, input rate, facing; grasp / placed / note per episode, saved at once |
@@ -149,7 +149,10 @@ Kota-san gave these three OKs **in person on 2026-11-01** during the supervised 
 - **Correction (log-042/043):** the 20:50 run had the left follower **powered and connected** (it moved to the start pose, 28 `a` presses), not "arm off"; it ended without a normal end.
 - **Recorder keys bug (log-042):** the page's ▶ / ■ did nothing because, with a desktop `DISPLAY`, lerobot reads → ← Esc from the PC's keyboard (any window), not from its terminal. Fixed with the existing key method: the recorder is started without `DISPLAY` (page and our scripts), the same as `collect_bimanual.sh` already does. Test with lerobot's real key reader.
 - **Both arms (log-043):** with the leader arms the page runs the team's `collect_bimanual.sh` (dry / gate / session, like the Collect tab); **both arms with the PICO is not possible yet** (lerobot's remote receiver is one-arm only → Kento).
-- **Findings fixed (log-043):** a short or failed gate can no longer be approved (review only with all episodes saved; a new gate cancels the OK); Abort only 60 s after End; check results expire and the Wi-Fi name is checked; scene required for gate/session; Japanese banners; the page shows "saved N of M episodes" and whether the recorder reads its keys from the page; guides updated (restart rule, power/CAN timing, recovery, data paths).
+- **Findings fixed (log-043):** a short or failed gate can no longer be approved (review only with all episodes saved; a new gate cancels the OK); Abort only 60 s after End; check results expire (the network check now means "same network as the headset", for tethering too); scene required for gate/session; Japanese banners; the page shows "saved N of M episodes" and whether the recorder reads its keys from the page; guides updated (restart rule, power/CAN timing, recovery, data paths).
+
+- **Findings fixed at the end of the day (log-045):** a gate needs at least 10 saved episodes before it can be approved; both arms use the task file's task and episode length (like the Collect tab); go/no-go item 5 must say `collect: left / right / both` explicitly; ③ needs a camera check from the last 10 minutes; a second pre-move away from the start pose is refused; closing the page waits 60 s for the recorder to save; guides: who supports the arm when it goes limp, what the page does not protect against, tethering details, one button table, how to operate the controllers.
+- **Today's go/no-go is not all PASS any more:** items 7 (written approvals) and 10 (wrist dry run after the rotation changes) are pending, so the page refuses to start until they are done.
 
 **Slack message to Kento-san (draft, to post in Slack):**
 
@@ -165,9 +168,9 @@ Kota-san gave these three OKs **in person on 2026-11-01** during the supervised 
 | Code | `~/projects/PICO-controller/pico_teleop/` (wall: `controller.py` `_edge`, `_hit_wall`, `_note_wall`; pre-move and video: `sender.py`, `video.py`) |
 | Scripts | `scripts/arm_session.sh left/right position/wrist` (`PREMOVE_CM=10`, `VIDEO=/dev/video4`), `scripts/gate4_sender.sh` (`HZ`, `ACC`), `scripts/video_check.sh`, `scripts/wrist_dry_run.sh` |
 | Offline tools | `tools/` (fastreplay, jerkbench, wristcheck, rotspeed, wristsim, frames.sh) |
-| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-043` (website); index `log/log.md` |
+| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-045` (website); index `log/log.md` |
 | Run records | `runs/pilot-pico-3-*`, `runs/wrist-left-20261101-*`, `runs/position-right-20261101-181616-*`, `runs/wrist-right-20261101-182038-*` |
-| Datasets (local only) | `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706` |
+| Datasets (local only, not backed up yet) | PICO pilot `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706`; smoothing test `…/openarm_pilot_pico_tmp_20261101_195903`; website runs with no episode `…_203728`, `…_205236` |
 | Safety runbook | `docs/hardware-runbook.md` (spotter card incl. walls and the pre-move) |
 | Plan | README "Plan in progress" |
 | Website | `pico_teleop/gui/` (`session.py`, `app.py`, `checks.py`, `i18n.py`), `scripts/gui.sh`, guides `docs/collection-website.md`, `docs/pico-working-setup.md` |

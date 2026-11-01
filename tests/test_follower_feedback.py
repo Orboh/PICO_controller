@@ -238,3 +238,13 @@ def test_link_pauses_do_not_lock():
         assert "LOCKED" not in (out.event or "")
         ch.arm.state = HOLD
     assert ch.arm.locked is None
+
+
+def test_premove_only_from_the_start_pose():
+    """log-045: a second pre-move would add another 10 cm; refused away from the start pose."""
+    import numpy as np
+    link = StubLink()
+    ch = ArmChannel("left", load_start_pose("left"), TeleopConfig(engage_hold_s=0.0), link, DEFAULT_URDF, 1.0,
+                    DEFAULT_TCP_OFFSET_M)
+    ch.arm.q = ch.arm.q + np.deg2rad(5.0)
+    assert "only from the start pose" in ch.premove_forward(0.10, time.monotonic())

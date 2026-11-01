@@ -1,13 +1,14 @@
 # Gate 5 — supervised real-arm sessions with the PICO (runbook + spotter card)
 
-Status (2026-11-01): supervised sessions, approvals in person by Kota-san (written Slack OK still to get).
-**Covered**: left arm position, gripper by trigger, wrist rotation (log-019/027), recording (log-020), joint_1 drift
-120° (log-025), the WALL behaviour on the left arm (log-034); right arm position (log-029). Follower checkout
-`openarm-orboh` `feat/takeei-wood-l1` @ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19.
-**Not covered**: walls on the right arm; stretched-arm / out-of-reach / joint-jump walls seen on the robot; the
-pre-move (Enter); `HZ=60 ACC=300`; the PICO video; both arms; a measured TCP; the default branches.
-**Rule from the 11-01 review (log-035)**: after a code change, run the offline replays (`tools/fastreplay.py`) and the
-test suite, and re-check go/no-go item 10 for rotation changes, **before** the next robot session.
+Status (2026-11-01, end of day): supervised sessions; approvals by Kota-san **in person only** (written Slack OK
+pending, item 7). **Confirmed on the robot**: left arm position, gripper, wrist rotation, recording, joint_1 drift 120°
+(log-019/020/025/027); right arm position and roll left (log-029); walls on both arms (left 94 contacts, right 55, no lock;
+log-034/036); 60 Hz + ease in/out on the left arm (log-037). **Not yet on the robot**: stretched-arm / out-of-reach walls;
+the pre-move; the PICO video; a recording from the website that saved episodes; both arms (leader) from the website;
+a measured TCP. Follower checkout `openarm-orboh` `feat/takeei-wood-l1` @ e98e987, lerobot `feat/bi-openarm-soft-move-to`
+(branches to be confirmed by Kento-san).
+**Which document governs**: for robot work this runbook (with the Notion "OpenArm 安全プロトコル"); the website guide
+(`docs/collection-website.md`) and the PICO setup page describe how, not whether. If they disagree, this runbook wins.
 Source rules: `notion/OpenArm 安全プロトコル…md` (archived copy), Kento's request §8-9.
 If anything surprises anyone: **stop** (spotter card below).
 
@@ -18,17 +19,18 @@ If anything surprises anyone: **stop** (spotter card below).
 | 2 | Axis signs, no arm | dry-run table in README; plus the 2 cm one-axis check on the arm (step 6) | one-time per code change in `frames.py` | Suraj | PASS (left "left" row to redo cleanly) | PASS (no change in `frames.py`) |
 | 3 | Emergency stop | located, pointed at, **pressed once with the arm off**, within the spotter's reach | **daily** | spotter (name) | done, Kento-san + Suraj (not "pressed once" on record) | PASS (spotter Suraj) |
 | 4 | PSU switches | which switch = which arm, labelled, reachable by the spotter | **daily** | spotter (name) | done | PASS (spotter Suraj) |
-| 5 | Arm and side | left arm only until the right arm's zero/sign is checked | per plan | Suraj + Kento | left | left; right approved by Kota-san 2026-11-01 for R1 (position 2 cm checks), then R2 (wrist) |
+| 5 | Arm and side | what may be **collected** today, written as `collect: left`, `collect: right`, `collect: both` (the website refuses any other arm); tests on other arms written separately | per plan | Suraj + Kento | left | collect: left (PICO pilot). Right arm: R1 / R2 checks and a wall check only, approved in person by Kota-san; no collection |
 | 6 | Start pose and checkout | sender prints the start-pose sha = `sha256sum` of the follower's file; follower checkout branch + commit as above (or a newer one Kento names) | **daily** | Suraj | PASS (sha 2ec31fb82bf0) | PASS left sha 2ec31fb82bf0; **right sha a3b97b8e9d66** (start j1 −59.6, j4 87.2, j7 66.7); openarm-orboh `feat/takeei-wood-l1` @ e98e987 |
-| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count | PASS: Kota-san OK in person on 2026-11-01 for the 120° joint_1 limit (relayed by Suraj; no written record yet) |
+| 7 | Feedback | `proposals/lerobot-follower-feedback.patch` applied **or** Kota/Kento OK for R1-R4 **in writing** (link here) | until the patch lands | Kota / Kento | session 2 (the counted test): Kota-san operated and gave the OK; written in Slack 12:59 https://orbohworkspace.slack.com/archives/C0C5F68JX8R/p1793419165855809 (general wording; ask him to confirm the scope). Session 1 had no approval and does not count | **pending**: OKs in person only on 11-01 (joint_1 120°, right arm, wall behaviour); needs the Slack link |
 | 8 | Standing mark | tape outside the arm's reach for the wearer; workspace clear | **daily** | spotter (name) | done | PASS (spotter Suraj; area left/front clear for a 120° shoulder swing) |
 | 9 | Grasp point | `--tcp-offset-m` measured or 0.1025 accepted | one-time | Suraj | 0.1025 accepted | 0.1025 accepted |
-| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | PASS 2026-10-31 (log-016) | PASS: dry run 10-31 both arms (log-016); the turn math (`frames.py`, `controller.py:350`) is unchanged since; the later rotation changes (72f3c6b, 356bff0) were used on the real arm in session 5 (log-019, followed 1:1); 50360c9 and d809f38 touch only position-only mode and the drift limit |
+| 10 | Wrist-rotation dry run | README "Wrist-rotation dry run" table PASS for both arms (log it) | before the first `--orientation` arm session; again after code changes | Suraj | PASS 2026-10-31 (log-016) | **pending**: rotation code changed after the 10-31 dry run (log-033 rotation slip / gap hold); redo the headset dry run (`bash scripts/wrist_dry_run.sh left`, then right) |
 
 ## Roles
+- **Page operator** (website): at the PC, presses the page's buttons; not the spotter.
 - **Spotter**: beside the arm, hand on the emergency stop, status terminal turned toward them.
   **The arm has priority over the terminal.** Only the spotter says "ready" and "esc".
-- **Wearer/operator**: on the tape mark, controllers in hand. Never presses A or Home.
+- **Wearer/operator**: on the tape mark, controllers in hand. Never presses A; Home only as a long press (recenter) before squeezing.
 - **Keyboard person** (may be the spotter): types the commands below; never while the wearer is engaged.
 
 ## Operating rules until follower feedback exists (R1-R4)

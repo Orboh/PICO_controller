@@ -38,11 +38,56 @@ wrist mode), solves the arm's joints (IK), checks every safety limit (walls, FAU
    — or the collection website's "Test PICO input" button. Its automatic card checks the network, service, demo window,
    headset ping and CAN links, but **not** the app's Status WORKING / sending: only the input test shows that.
 
+## How to operate the PICO controllers (operator in the headset)
+**Stand and face:** stand behind the robot on the tape mark, **facing the same way the robot faces**, then recenter the
+view (long press of Home). Your forward = the arm's forward. A squeeze is refused if you face more than 75° away;
+once moving you may turn your head to watch the arm. **Left controller = left arm, right controller = right arm.**
+
+**Move the arm — the GRIP button** (the side button under the middle finger):
+1. **Squeeze the grip and keep holding it.** After **0.3 s** the arm is connected (`ENGAGED`). It does **not** jump to
+   your hand: from now on it copies how your hand **moves**, at **half the distance** (hand 10 cm → gripper 5 cm),
+   up to 0.25 m/s.
+2. **Move your hand** forward / back, left / right, up / down: the gripper moves the same way (robot's directions).
+3. **Release the grip fully** → the arm **stops and holds** where it is (`HOLD`); your hand can move freely.
+4. **To reach further, "clutch":** release, bring your hand back to a comfortable place, squeeze again, continue.
+   Every new squeeze starts from where the arm is now.
+- Half-squeezed (0.4–0.6) changes nothing. A short accidental squeeze (< 0.3 s) does nothing.
+
+**Open and close the gripper — the TRIGGER** (index finger), **only while the grip is held:**
+- Trigger **released** = gripper **open** (−58°); trigger **fully pulled** = gripper **closed** (0°); in between = in
+  between. To grasp: hold the grip, move the open gripper around the object, then **pull the trigger** slowly.
+  To place: keep the grip, move over the target, **release the trigger** → it opens.
+- **Gentle sync:** right after each squeeze the gripper moves **slowly (30°/s)** to where your trigger is; once it
+  matches it follows quickly (up to 120°/s). So keep the trigger where the gripper already is when you squeeze
+  (e.g. keep it pulled while carrying an object), or the gripper slowly opens / closes to match.
+- With the grip released (HOLD) the gripper does not follow the trigger.
+
+**Turn the wrist** (only when wrist rotation is switched on): while squeezing, turning your hand turns the gripper
+by the **same angle** (roll, pitch, yaw), at most 90°/s; the angle you held at the squeeze counts as zero.
+
+**Other buttons**
+| Button | Effect |
+|---|---|
+| **A** (right) | toggles sending in the app → **never press during a session** (the arm FAULTs) |
+| **B** (right) | only the app's video view (2D / 3D), when video is used |
+| **Y** (left) | PICO video on/off (hold 1 s), only if the page was started with video; never while the arm follows |
+| X, menu, sticks | nothing |
+| **Home** | long press = recenter (OK); short press leaves the app (don't) |
+
+**What you may see**
+| Message | Meaning | Do |
+|---|---|---|
+| `WALL: …` (the arm stops) | the edge of the safe range (joint limit, arm stretched, too far from the start, turned too far / too fast) | move back; the arm follows again at once |
+| `FAULT` | something is wrong (tracking lost, hand jumped, link) — the arm **freezes** | release the grip, wait for the spotter's "ready", squeeze again |
+| `LOCKED` | repeated FAULTs | stop: release, the page operator ends the recording and restarts |
+| facing refused | you face > 75° away | turn your body to the robot's forward |
+Keep both controllers in the headset's view (a hidden controller can jump when seen again → FAULT).
+
 ## Rules learned (what went wrong before)
 | Pitfall | What to do |
 |---|---|
-| **A** button turns sending off (arm FAULTs) | never press A during a session; B switches the video view |
-| Short press of Home leaves the app | only a long press (recenter) |
+| **A** button turns sending off (arm FAULTs) | never press A during a session (button table above) |
+| Short press of Home leaves the app | only a long press (recenter), before squeezing |
 | Headset sleeps ~8 s after it is taken off | keep it on; wake it, check the input again |
 | 3D demo window open | close it (second reader) |
 | Input gaps of 0.2-0.35 s about every 15 s (headset/app side) | the sender tolerates up to 0.4 s; longer → FAULT, release and squeeze again |

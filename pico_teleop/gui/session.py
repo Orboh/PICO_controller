@@ -68,6 +68,15 @@ class Options:
     scene: str = "none"        # one arm, gate/session: an openarm-orboh scenes/<name>.yaml (dry: none)
 
 
+def env_task(path: pathlib.Path = BIMANUAL_ENV) -> str:
+    """The TASK text collect_bimanual.sh will use (from its task file), for notes and the gate review."""
+    try:
+        m = re.search(r'^TASK="([^"]*)"', path.read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
 def bimanual_leader(o: Options) -> bool:
     """Both arms with the leader arms: the team's collect_bimanual.sh reads the leader arms itself (log-043)."""
     return o.method == "leader" and o.side == "both"
@@ -110,7 +119,9 @@ def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], 
         if o.stage == "session":
             argv.append(o.tag.strip())
         argv.append(str(int(o.episodes)))
-        env = {"ENV_FILE": str(BIMANUAL_ENV), "OPERATOR": o.operator.strip(), "EPISODE_TIME_S": str(int(o.episode_time_s)),
+        env = {"ENV_FILE": str(BIMANUAL_ENV), "OPERATOR": o.operator.strip(),
+               # like the Collect tab: no EPISODE_TIME_S unless set (0 = the task file's value, 120 s for sorting)
+               "EPISODE_TIME_S": str(int(o.episode_time_s)) if o.episode_time_s > 0 else None,
                "PLAY_SOUNDS": "true", "BILATERAL_FEEDBACK": "true", "SAVE_ON_EPISODE_END": "true",
                "RETURN_ON_EPISODE_END": "true", "START_POSE_HOLD": "true", "START_COUNTDOWN_S": "3",
                "L_BILATERAL_GRIPPER_KP": "1.25", "L_BILATERAL_GRIPPER_KD": "0.06",   # the Collect tab's runbook values
@@ -294,7 +305,8 @@ def other_senders(pgrep: Callable[[str], bool] | None = None) -> list[str]:
     return [p for p in OTHER_SENDERS if probe(p)]
 
 
-GOOD_CELL = re.compile(r"^\**\s*(pass|accepted|n/a|left|right|0\.1025)", re.I)
+GOOD_CELL = re.compile(r"^\**\s*(pass|accepted|n/a|0\.1025|collect:)", re.I)
+COLLECT_TOKEN = re.compile(r"collect:\s*([a-z ,|/]+)", re.I)   # item 5 must say e.g. "collect: left, right, both" (log-045)
 
 
 def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md", today: dt.date | None = None,
@@ -322,9 +334,12 @@ def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md"
                 bad.append(cells[0])
     if bad:
         return False, "go/no-go items not PASS: " + ", ".join(bad)
-    need = ("left", "right") if side == "both" else ((side,) if side else ())
-    if any(x not in item5.lower() for x in need):
-        return False, f"go/no-go item 5 does not approve the {side} arm today ({item5[:60]})"
+    if side:
+        m = COLLECT_TOKEN.search(item5)
+        allowed = set(re.findall(r"left|right|both", m.group(1).lower())) if m else set()
+        if side not in allowed:
+            return False, (f"go/no-go item 5 does not approve collection with the {side} arm(s) today: it needs an explicit "
+                           f"'collect: {side}' (now: {item5[:60]})")
     return True, "all items PASS" + (f" · item 5: {item5[:70]}" if item5 else "")
 
 
@@ -367,6 +382,7 @@ class CollectionSession:
         self.keys_from_page: bool | None = None  # lerobot said it reads keys from its terminal (log-042 check)
         self.saved_episodes: int | None = None   # from the run folder's manifest after the recorder exits
         self.end_pressed_at: float | None = None
+        self.cameras_ok_at: float | None = None   # last passed camera check (③ needs one, log-045)
         self.reviews_path = reviews or (runs_dir / "gui-reviews.json")
         self.gate_done: dict | None = load_reviews(self.reviews_path).get("pending")  # a complete gate waiting for the OK
         self.opts = Options()
@@ -427,6 +443,8 @@ class CollectionSession:
             raise SessionError("type the operator's name in latin letters (it goes into the dataset)")
         if o.stage not in STAGES:
             raise SessionError("choose a method and an arm")
+        if o.stage == "gate" and o.episodes < STAGE_EPISODES["gate"]:
+            raise SessionError(f"a gate needs at least {STAGE_EPISODES['gate']} episodes")
         if o.method == "pico" and o.side == "both":
             raise SessionError("both arms with the PICO needs a two-arm remote receiver in lerobot (not there yet): "
                                "use one arm, or the leader arms for both")
@@ -435,7 +453,7 @@ class CollectionSession:
         if not bimanual_leader(o) and o.stage != "dry" and (o.scene.strip() in ("", "none")
                                                             or not (ORBOH / "scenes" / f"{o.scene.strip()}.yaml").exists()):
             raise SessionError("gate / session need a scene profile (openarm-orboh scenes/<name>.yaml), not 'none'")
-        if o.stage == "session" and not self.gate_ok(o.method, o.side, o.task):
+        if o.stage == "session" and not self.gate_ok(o.method, o.side, env_task() if bimanual_leader(o) else o.task):
             raise SessionError(f"a session needs a reviewed gate of 10 for {o.method} / {o.side} first: record a gate, "
                                "show it to the reviewer, record their OK")
         ok, why = self.gng(o.side)
@@ -445,6 +463,8 @@ class CollectionSession:
         if busy:
             raise SessionError("another program already drives an arm: " + ", ".join(busy) + " (stop it first, rule R2)")
         self.opts = dataclasses.replace(o, operator=o.operator.strip())
+        if bimanual_leader(o):                    # the script reads TASK from its task file (the page box is ignored)
+            self.opts = dataclasses.replace(self.opts, task=env_task())
         if o.stage == "gate":                       # a new gate cancels the old OK (the Collect tab's rule)
             data = load_reviews(self.reviews_path)
             if data.pop(f"{o.method}_{o.side}", None) is not None:
@@ -487,6 +507,8 @@ class CollectionSession:
             sha, ok = self.sha_line()  # one arm only (PICO both arms is refused at ①)
             if not ok:
                 raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {EXPECTED_SHA[self.opts.side]}")
+        if self.cameras_ok_at is None or time.monotonic() - self.cameras_ok_at > 600:
+            raise SessionError("check the cameras first (button 'Check cameras', all found, within the last 10 minutes)")
         down = self.links(self.opts.method, self.opts.side)
         if down:
             raise SessionError("CAN link down: " + ", ".join(down) + " — arm power on? run canup.sh (openarm-orboh), then try ③ again")
@@ -591,7 +613,7 @@ class CollectionSession:
                 self.recorder.send(KEYS["stop"])
             except (SessionError, OSError):
                 pass
-            if self.recorder.wait(20.0) is None:
+            if self.recorder.wait(60.0) is None:      # saving the last episode can take ~22 s (log-043)
                 self.recorder.interrupt()
             msgs.append("recorder ended (Esc)")
         if self.teleop_running:
@@ -648,7 +670,7 @@ class CollectionSession:
             self.recording_now, self.power_confirmed = False, False
             self._read_manifest()
             if (self.opts.stage == "gate" and code == 0 and self.saved_episodes is not None
-                    and self.saved_episodes >= self.opts.episodes):     # only a complete gate can be reviewed (Elephant #1)
+                    and self.saved_episodes >= max(self.opts.episodes, STAGE_EPISODES["gate"])):     # only a complete gate can be reviewed (Elephant #1)
                 self.gate_done = {"method": self.opts.method, "side": self.opts.side, "tag": self.tag, "dataset": self.dataset,
                                   "episodes": self.saved_episodes, "task": self.opts.task}
                 data = load_reviews(self.reviews_path)

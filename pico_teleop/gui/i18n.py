@@ -30,7 +30,7 @@ TEXT: dict[str, tuple[str, str]] = {
     "stage.dry": ("dry (2 throw-away, check)", "dry（捨て2本・動作確認）"),
     "stage.gate": ("gate (10 for review)", "gate（受入10本・確認待ち）"),
     "stage.session": ("session (after the gate OK)", "session（gate OK の後）"),
-    "episodes": ("Episodes", "本数"), "seconds": ("Seconds each", "1本の秒数"),
+    "episodes": ("Episodes", "本数"), "seconds": ("Seconds each (0 = task file)", "1本の秒数（0 = 設定ファイル）"),
     "operator": ("Operator name (latin letters, required)", "操作者名（半角英字・必須）"),
     "task": ("Task (same text for both methods)", "タスク（両方式で同じ文）"),
     "smooth": ("Smooth motion (60 Hz + ease in/out, log-037)", "なめらか（60 Hz + 加減速, log-037）"),
@@ -155,6 +155,8 @@ REFUSALS_JA: list[tuple[str, str]] = [
     ("NO EPISODE WAS SAVED", "この記録ではエピソードが1本も保存されていない。先に出力を確認"),
     ("LOCKED:", "LOCKED: 手を離す → 記録終了 → ④ → やり直し（R2）"),
     ("ANOTHER SENDER", "別の送信が腕を動かしている — 非常停止"),
+    ("a gate needs at least", "gate は 10 本以上が必要です"),
+    ("check the cameras first", "先に「カメラを確認」を押す（全部見つかること、10 分以内）"),
     ("this tab only watches", "このタブは表示のみ（別のタブが操作中）"),
 ]
 EMERGENCY_JA = " — 緊急時は非常停止を（このページではない）。"
