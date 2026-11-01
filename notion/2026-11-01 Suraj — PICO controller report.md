@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `6945a98`, not pushed) · Logs `log/log-025` … `log-042`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `1508dd1`, not pushed) · Logs `log/log-025` … `log-043`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -40,7 +40,7 @@ Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall be
 | Pre-move: Enter moves the arm 10 cm forward slowly | tests | ❌ not used yet |
 | 60 Hz + ease in/out (jerk) | ✅ −44…66 % jerk | ✅ −45 %, step wobble at leader level (log-037) |
 | Video on/off from the controller | tests | ❌ not used (decision) |
-| Collection website (both methods, checks, stages, EN/JA) | ✅ 139 tests, browser check, live connection checks green | 🟡 headset-only check: PICO link through the page OK (~53 Hz, correct start pose); not used with a powered arm yet (log-041) |
+| Collection website (both methods, checks, stages, EN/JA, both arms with the leader arms) | ✅ 146 tests, browser check, live connection checks green | 🟡 headset-only check: PICO link OK (~53 Hz); one run with a **powered** follower (20:50) moved it to the start pose but recorded **no episode** (keys bug, log-042); no saved episode from the page yet |
 
 The limit numbers measured on the robot are the values **sent** to the arm (no feedback from the arm yet); that the arm held at each wall was judged by the spotter.
 
@@ -115,6 +115,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [ ] Left start pose with more room for joint_2 (most common wall: 43 of 94)
 - [ ] Confirm the follower branch `feat/takeei-wood-l1` as the one to use
 - [ ] Proposal: a command channel in the lerobot record loop instead of typed keys (Slack draft in §3, website part)
+- [ ] A two-arm remote receiver in lerobot (needed for both arms with the PICO)
 
 **Decision to make — owner: Suraj**
 - [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
@@ -126,7 +127,8 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 
 **Website (before the robot)**
 - [x] Headset-only check of the website (arm off) — PICO link OK; recorder hang found and fixed (log-041)
-- [ ] Supervised session with the website: dry with both methods, then gate + reviewer OK
+- [ ] Supervised session with the website: dry with both methods (check "keys from this page ✅" and "saved 2 of 2"), then gate + reviewer OK
+- [ ] Both arms with the leader arms from the page: dry
 
 **Then data collection**
 - [ ] PICO block × 5 (left) with the wall and `HZ=60 ACC=300` (add `WRIST_MODE=1` if the wrist should turn)
@@ -142,7 +144,10 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - Reviewed by Elephant (16 findings) and Goldfish (10); 3 blockers fixed (one recording per teleop start, crashed-sender status, go/no-go enforced).
 - Start: `bash ~/projects/PICO-controller/scripts/gui.sh` → http://localhost:8090.
 - **Headset-only check (log-041):** ① from the page worked (PICO ~53 Hz, correct start pose, HOLD, notes saved). ③ was pressed with the follower CAN link down: the recorder failed at once ("Network is down", the arm never moved) and then hung; it had to be stopped with Ctrl-C. Fixed: ② refuses the same person as operator and spotter; ③ refuses while the follower (or leader) CAN link is down; a red "RECORDER FAILED" banner and an "Abort recorder (Ctrl-C)" button (only when the recorder fails or does not end).
+- **Correction (log-042/043):** the 20:50 run had the left follower **powered and connected** (it moved to the start pose, 28 `a` presses), not "arm off"; it ended without a normal end.
 - **Recorder keys bug (log-042):** the page's ▶ / ■ did nothing because, with a desktop `DISPLAY`, lerobot reads → ← Esc from the PC's keyboard (any window), not from its terminal. Fixed with the existing key method: the recorder is started without `DISPLAY` (page and our scripts), the same as `collect_bimanual.sh` already does. Test with lerobot's real key reader.
+- **Both arms (log-043):** with the leader arms the page runs the team's `collect_bimanual.sh` (dry / gate / session, like the Collect tab); **both arms with the PICO is not possible yet** (lerobot's remote receiver is one-arm only → Kento).
+- **Review of log-040…042 (Elephant + Goldfish, log-043):** fixed — a short or failed gate can no longer be approved (review only with all episodes saved; a new gate cancels the OK); Abort only 60 s after End; check results expire and the Wi-Fi name is checked; scene required for gate/session; Japanese banners; the page shows "saved N of M episodes" and whether the recorder reads its keys from the page; guides updated (restart rule, power/CAN timing, recovery, data paths).
 
 **Slack message to Kento-san (draft, to post in Slack):**
 
@@ -158,7 +163,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | Code | `~/projects/PICO-controller/pico_teleop/` (wall: `controller.py` `_edge`, `_hit_wall`, `_note_wall`; pre-move and video: `sender.py`, `video.py`) |
 | Scripts | `scripts/arm_session.sh left/right position/wrist` (`PREMOVE_CM=10`, `VIDEO=/dev/video4`), `scripts/gate4_sender.sh` (`HZ`, `ACC`), `scripts/video_check.sh`, `scripts/wrist_dry_run.sh` |
 | Offline tools | `tools/` (fastreplay, jerkbench, wristcheck, rotspeed, wristsim, frames.sh) |
-| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-042` (website); index `log/log.md` |
+| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-043` (website); index `log/log.md` |
 | Run records | `runs/pilot-pico-3-*`, `runs/wrist-left-20261101-*`, `runs/position-right-20261101-181616-*`, `runs/wrist-right-20261101-182038-*` |
 | Datasets (local only) | `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706` |
 | Safety runbook | `docs/hardware-runbook.md` (spotter card incl. walls and the pre-move) |
