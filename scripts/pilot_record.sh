@@ -12,4 +12,4 @@ cd ~/projects/openarm-orboh && REMOTE=true SIDE="$SIDE" WRIST=true WRIST_SERIAL=
   OPERATOR="${OPERATOR:-kota}" SCENE=none NUM_EPISODES="${2:-5}" EPISODE_TIME_S="${EPISODE_TIME_S:-30}" \
   DISPLAY_DATA=false REPO_ID="${REPO_ID:-Orboh/openarm_pilot_${METHOD}_tmp}" \
   TASK="${TASK:-Pick up the object and place it in the bin}" \
-  bash scripts/record_pick_place_openarm.sh "pilot-${METHOD}"
+  env -u DISPLAY -u WAYLAND_DISPLAY bash scripts/record_pick_place_openarm.sh "pilot-${METHOD}"   # keys from this terminal, as collect_bimanual.sh (log-042)

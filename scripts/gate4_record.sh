@@ -6,4 +6,4 @@
 cd ~/projects/openarm-orboh && REMOTE=true SIDE=left WRIST=true WRIST_SERIAL=409122272149 \
   OPERATOR="${OPERATOR:-kota}" SCENE=none NUM_EPISODES="${NUM_EPISODES:-2}" EPISODE_TIME_S="${EPISODE_TIME_S:-15}" \
   DISPLAY_DATA=false REPO_ID=Orboh/openarm_pico_gate4_tmp TASK="PICO gate 4 dry run" \
-  bash scripts/record_pick_place_openarm.sh "${1:-pico-gate4-dry}"
+  env -u DISPLAY -u WAYLAND_DISPLAY bash scripts/record_pick_place_openarm.sh "${1:-pico-gate4-dry}"   # keys from this terminal (log-042)
