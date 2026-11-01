@@ -223,3 +223,31 @@ def test_notes_are_saved(sess):
     sess.set_note(0, grasp=True, text="dropped at the bin edge")
     data = json.loads(next(sess.runs_dir.glob("*-notes.json")).read_text())
     assert data["episodes"]["0"]["grasp"] is True and data["options"]["method"] == "leader"
+
+
+def test_stage_repo_ids_and_session_needs_a_reviewed_gate(tmp_path):
+    assert gs.repo_id(Options(stage="dry", method="pico")) == "Orboh/openarm_pilot_pico_tmp"
+    assert gs.repo_id(Options(stage="gate", method="leader", side="right")) == "Orboh/openarm_leader_right_gate"
+    s = _sess(tmp_path, reviews=tmp_path / "rev.json")
+    with pytest.raises(SessionError, match="reviewed gate"):
+        s.start_teleop(Options(stage="session", **OPS))
+    s.gate_done = {"method": "pico", "side": "left", "tag": "t", "dataset": None, "episodes": 10}
+    with pytest.raises(SessionError, match="reviewer's name"):
+        s.record_review("")
+    s.record_review("Kota")
+    assert s.gate_ok("pico", "left")["reviewer"] == "Kota" and s.gate_ok("pico", "right") is None
+    s.start_teleop(Options(stage="session", **OPS))
+    s.teleop.proc.kill()
+
+
+def test_checks_and_translations(tmp_path, monkeypatch):
+    from pico_teleop.gui import checks, i18n
+    monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "wlp0s20f3 UP 192.168.0.136/24\n" if argv[0] == "ip" else "orboh\n")
+    assert checks.wifi().ok
+    monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "LISTEN 0 4096 [::ffff:127.0.0.1]:60061 *:*\n")
+    assert checks.service().ok
+    monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "rate ~8 Hz | L ok | R ok | facing 3 deg  (OK)")
+    assert checks.pico_input().ok is False
+    assert all(len(v) == 2 and v[1] for v in i18n.TEXT.values())
+    assert i18n.refusal("the operator is still squeezing: release", "ja").startswith("操作者がまだ握って")
+    assert i18n.t("arm", "ja", s="左") == "左腕"

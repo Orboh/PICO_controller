@@ -93,7 +93,7 @@ The sender prints the state of each arm once per second and every event as it ha
 
 ## Collection GUI (log-038, review fixes log-039): leader arm or PICO, one page
 ```bash
-bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC
+bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC (guide: docs/collection-website.md)
 ```
 ![collection GUI](docs/img/collection-gui.png)
 - **Roles**: a **page operator** at the PC presses the buttons; the **spotter** keeps the e-stop and the power switch

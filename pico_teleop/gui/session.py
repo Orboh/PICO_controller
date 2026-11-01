@@ -28,6 +28,8 @@ from collections.abc import Callable
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 METHODS = ("pico", "leader")
+STAGES = ("dry", "gate", "session")       # the Collect tab's pipeline (instructions §3.3): check, 10 for review, collect
+STAGE_EPISODES = {"dry": 2, "gate": 10}
 SIDES = ("left", "right")
 KEYS = {"next": b"\x1b[C", "rerecord": b"\x1b[D", "reset": b"a", "stop": b"\x1b"}
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\r")
@@ -52,6 +54,7 @@ class Options:
 
     method: str = "pico"
     side: str = "left"
+    stage: str = "dry"
     episodes: int = 5
     episode_time_s: int = 30
     operator: str = ""
@@ -78,9 +81,18 @@ def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO
     return argv
 
 
+def repo_id(o: Options) -> str:
+    """Dataset name per stage: dry stays a throw-away `_tmp`; gate and session name method, arm and stage
+    (record_pick_place_openarm.sh stamps the date/time onto it). Local only: nothing is pushed to the Hub."""
+    if o.stage == "dry":
+        return f"Orboh/openarm_pilot_{o.method}_tmp"
+    return f"Orboh/openarm_{o.method}_{o.side}_{o.stage}"
+
+
 def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], dict[str, str]]:
     """The recorder child: `pilot_record.sh` unchanged (same dataset settings for both methods)."""
-    env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip()}
+    env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip(),
+           "REPO_ID": repo_id(o)}
     return ["bash", str(repo / "scripts" / "pilot_record.sh"), o.method, str(int(o.episodes))], env
 
 
@@ -283,14 +295,26 @@ def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md"
     return True, "all items PASS" + (f" · item 5: {item5[:70]}" if item5 else "")
 
 
+REVIEWS = REPO / "runs" / "gui-reviews.json"
+
+
+def load_reviews(path: pathlib.Path = REVIEWS) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 class CollectionSession:
     """Teleop child + recorder child + notes, with the runbook's order and safety rules."""
 
     def __init__(self, runs_dir: pathlib.Path = REPO / "runs", spawn: Callable[..., PtyChild] = PtyChild,
                  probe: Callable[[], list[str]] = other_senders, facing: Callable[[list], float | None] | None = None,
-                 gng: Callable[[str], tuple[bool, str]] | None = None):
+                 gng: Callable[[str], tuple[bool, str]] | None = None, reviews: pathlib.Path | None = None):
         self.runs_dir, self.spawn, self.probe, self.facing = runs_dir, spawn, probe, facing
         self.gng = gng or (lambda side: go_no_go_today(side=side))
+        self.reviews_path = reviews or (runs_dir / "gui-reviews.json")
+        self.gate_done: dict | None = None    # a finished gate waiting for the reviewer's OK
         self.opts = Options()
         self.teleop: PtyChild | None = None
         self.recorder: PtyChild | None = None
@@ -347,6 +371,11 @@ class CollectionSession:
             raise SessionError("choose a method and an arm")
         if not OPERATOR_NAME.fullmatch(o.operator.strip()):
             raise SessionError("type the operator's name in latin letters (it goes into the dataset)")
+        if o.stage not in STAGES:
+            raise SessionError("choose a method and an arm")
+        if o.stage == "session" and not self.gate_ok(o.method, o.side):
+            raise SessionError(f"a session needs a reviewed gate of 10 for {o.method} / {o.side} first: record a gate, "
+                               "show it to the reviewer, record their OK")
         ok, why = self.gng(o.side)
         if not ok:
             raise SessionError(why)
@@ -417,6 +446,23 @@ class CollectionSession:
                     "reset": "a: return to the start pose (the arm moves" + (", the leader arm too" if self.opts.method == "leader" else "") + ")",
                     "stop": "esc: end recording (the arm returns and goes limp)"}[name])
         self.save_notes()
+
+    def gate_ok(self, method: str, side: str) -> dict | None:
+        r = load_reviews(self.reviews_path).get(f"{method}_{side}")
+        return r if r and r.get("reviewer") else None
+
+    def record_review(self, reviewer: str) -> None:
+        """The reviewer looked at the finished gate and gave the OK (the Collect tab's V4 rule)."""
+        if not OPERATOR_NAME.fullmatch(reviewer.strip()):
+            raise SessionError("type the reviewer's name")
+        if not self.gate_done:
+            raise SessionError("no finished gate to review")
+        data = load_reviews(self.reviews_path)
+        data[f"{self.gate_done['method']}_{self.gate_done['side']}"] = {
+            **self.gate_done, "reviewer": reviewer.strip(), "ok_at": dt.datetime.now().isoformat(timespec="seconds")}
+        self.reviews_path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        self._note(f"gate OK recorded: reviewer {reviewer.strip()} ({self.gate_done['episodes']} episodes)")
+        self.gate_done = None
 
     def premove(self) -> None:
         if not (self.teleop_running and self.opts.method == "pico" and self.opts.premove_cm > 0):
@@ -506,6 +552,9 @@ class CollectionSession:
                 self._flag("recorder exited")
             self.recording_now, self.power_confirmed = False, False
             self._read_manifest()
+            if self.opts.stage == "gate":
+                self.gate_done = {"method": self.opts.method, "side": self.opts.side, "tag": self.tag, "dataset": self.dataset,
+                                  "episodes": len(self.notes)}
             self._note(f"recorder exited (code {code}); next: ④ stop the teleop" + (f"; data: {self.dataset}" if self.dataset else ""))
             self.save_notes()
 

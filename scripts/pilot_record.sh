@@ -10,6 +10,6 @@ SIDE="${SIDE:-left}"   # log-038: left or right (the GUI passes it)
 case "$SIDE" in left) WS=409122272149;; right) WS=352122273417;; *) echo "SIDE must be left or right" >&2; exit 1;; esac
 cd ~/projects/openarm-orboh && REMOTE=true SIDE="$SIDE" WRIST=true WRIST_SERIAL="${WRIST_SERIAL:-$WS}" \
   OPERATOR="${OPERATOR:-kota}" SCENE=none NUM_EPISODES="${2:-5}" EPISODE_TIME_S="${EPISODE_TIME_S:-30}" \
-  DISPLAY_DATA=false REPO_ID="Orboh/openarm_pilot_${METHOD}_tmp" \
+  DISPLAY_DATA=false REPO_ID="${REPO_ID:-Orboh/openarm_pilot_${METHOD}_tmp}" \
   TASK="${TASK:-Pick up the object and place it in the bin}" \
   bash scripts/record_pick_place_openarm.sh "pilot-${METHOD}"
