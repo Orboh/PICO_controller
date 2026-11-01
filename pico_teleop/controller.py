@@ -260,10 +260,14 @@ class ArmTeleop:
         self.wall = self.blocked_now = why
         return f"WALL: {why}: {hint} (not a FAULT)" if first else None
 
-    def _fault(self, why: str) -> StepOut:
+    def _fault(self, why: str, count: bool = True) -> StepOut:
+        """Freeze; release clears it. `count=False`: not counted toward the lockout (log-037: a link pause
+        while lerobot-record saves an episode is expected, not a repeated operator problem)."""
         self.state, self.wall = FAULT, None
         self.q_ik = self.q.copy()
         self.qd = np.zeros_like(self.q)
+        if not count:
+            return self._out(f"FAULT: {why} (targets frozen; release grip, then squeeze to re-anchor)")
         # kind of FAULT: message head with numbers and joint indices removed ("IK jumped 5.6 deg" and
         # "IK jumped 6.5 deg" are the same kind; so are "joint_1 would ..." and "joint_7 would ...")
         key = re.sub(r"[-+]?\d+(\.\d+)?", "N", re.sub(r"joint_\d", "joint_N", why.split("(")[0]))
@@ -314,9 +318,9 @@ class ArmTeleop:
             return "fault cleared by grip release (HOLD)"
         return None
 
-    def force_fault(self, why: str) -> StepOut:
+    def force_fault(self, why: str, count: bool = True) -> StepOut:
         """For faults found outside this class (validator, link)."""
-        return self._fault(why) if self.state == ENGAGED else self._out()
+        return self._fault(why, count) if self.state == ENGAGED else self._out()
 
     def step(self, h: HandInput) -> StepOut:
         cfg = self.cfg

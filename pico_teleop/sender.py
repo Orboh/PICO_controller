@@ -246,7 +246,8 @@ class ArmChannel:
                           "must not get our held pose). Restart the follower, then the sender (runbook R2)")
         if ls == "lost" and not self.link_down:
             self.link_down = True
-            event = (self.arm.force_fault("link lost: no echo from the receiver").event or "") + \
+            # log-037: not counted toward the lockout (lerobot-record pauses the receiver while it saves)
+            event = (self.arm.force_fault("link lost: no echo from the receiver", count=False).event or "") + \
                 " | LINK DOWN: holding; if the follower was restarted, restart this sender too (runbook R2)"
         elif ls == "ok" and self.link_down:
             self.link_down, event = False, "link back: release the grip, then squeeze to continue"

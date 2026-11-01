@@ -1,12 +1,12 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-036`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-037`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
 - **Main problem: 4 sessions ended LOCKED** the same way: the arm reached the edge of its workspace → FAULT → the operator squeezed again in the same pose → FAULT again → LOCKED → session over.
 - **Fix: the "wall".** At the edge the arm now stops and holds, the hand slips, moving back works at once; no FAULT, no lock. **Verified on the robot (left arm): 94 wall contacts in 7 minutes, no lock.**
-- **PICO episodes were jerkier than leader episodes**, mainly because the sender (50 Hz) and the recorder (30 fps) run at different rates. Fix tested offline (−44…66 % jerk), not yet on the robot.
+- **PICO episodes were jerkier than leader episodes**, mainly because the sender (50 Hz) and the recorder (30 fps) run at different rates. Fix (60 Hz + ease in/out) **confirmed on the robot: jerk −45 %, now as smooth as the leader episodes.**
 - **Video (FPV) pipeline with an on/off button on the controller**: built, **not used** for now (Wi-Fi load).
 - Reviewed by Elephant + Goldfish at the end of the day; 4 code fixes applied (§3).
 
@@ -20,6 +20,7 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 | R2 wrist | right | Kento-san / Suraj | roll and pitch | roll left OK; roll right hit joint_2 → **LOCKED**; pitch not reached | log-029 |
 | Wall check 1 | left | — / Suraj | push into the edges | 5 walls, none FAULTed; locked from the wrist-turning side → fixed | log-033 |
 | Wall check 2 | left | — / Suraj | push into the edges for 7 min | **PASS: 63 squeezes, 94 walls, 1 real tracking FAULT, no lock** | log-034 |
+| Smoothing test | left | — / Suraj | PICO episodes with 60 Hz + ease in/out | jerk 24.9 k (−45 %), as smooth as the leader; then **LOCKED** on link losses while the recorder saved → fixed | log-037 |
 | Wall check right | right | Kento-san / Suraj | joint limit, reach forward, re-squeeze, fast wrist turn | **PASS: 25 squeezes, 55 walls, no lock** (only FAULT: link lost because `esc` was pressed while still squeezing) | log-036 |
 
 Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall behaviour). **To do: a written OK in Slack.**
@@ -32,9 +33,10 @@ Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall be
 | Right arm directions | dry run | ✅ R1 (spotter) |
 | Walls: joint limit, drift, wrist turning | ✅ | ✅ left and right arm (no lock) |
 | Walls: posture (60° per squeeze), wrist cannot keep the hand's rotation | ✅ | ✅ right arm |
-| Walls: stretched arm, out of reach, joint jump | ✅ | ❌ not seen on the robot: reaching forward, the joint_1 120° wall stops the arm first |
+| Walls: joint jump | ✅ | ✅ smoothing test |
+| Walls: stretched arm, out of reach | ✅ | ❌ not seen on the robot: reaching forward, the joint_1 120° wall stops the arm first |
 | Pre-move: Enter moves the arm 10 cm forward slowly | tests | ❌ not used yet |
-| 60 Hz + ease in/out (jerk) | ✅ −44…66 % jerk | ❌ |
+| 60 Hz + ease in/out (jerk) | ✅ −44…66 % jerk | ✅ −45 %, step wobble at leader level (log-037) |
 | Video on/off from the controller | tests | ❌ not used (decision) |
 
 The limit numbers measured on the robot are the values **sent** to the arm (no feedback from the arm yet); that the arm held at each wall was judged by the spotter.
@@ -46,7 +48,9 @@ The limit numbers measured on the robot are the values **sent** to the arm (no f
 | Left roll/pitch locked | joint_6 has only ±45°; start pose +19° leaves ~21° | start 10 cm forward (every direction ≥ 27° of room); wall | robot ✅ |
 | Right roll locked | 24 cm forward reach in wrist mode pushed joint_2 to its limit edge | wall | offline ✅ |
 | Wall check 1 locked | fast wrist turns at the limit: "hand turned ahead of the gripper" was still a FAULT | the wrist-turning side is a wall too | robot ✅ (wall check 2) |
-| PICO episodes jerkier than leader | sender 50 Hz vs recorder 30 fps; hard speed cut; input gaps | 60 Hz + ease in/out (opt-in) | offline ✅, robot ❌ |
+| PICO episodes jerkier than leader | sender 50 Hz vs recorder 30 fps; hard speed cut; input gaps | 60 Hz + ease in/out (opt-in) | robot ✅ (−45 %) |
+| Smoothing test locked | the operator squeezed while the recorder saved an episode → "link lost" twice | a link pause no longer counts toward the lock (still freezes the arm) | offline ✅ |
+| Roll/pitch/yaw did not work in the recording runs | the recording script runs position mode (by design, fair comparison) | `WRIST_MODE=1` for recording with wrist rotation | ✅ |
 | Arm did not move in one run (17:49) | follower side (power / start order) | order: power on, then the follower | robot ✅ |
 | Commands broke when pasted | long commands wrapped | one-word scripts (`arm_session.sh`, `wrist_dry_run.sh`) | ✅ |
 
@@ -77,6 +81,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | **60 Hz + 300°/s²** | **22.5 k (−44 %)** | **22 k (−66 %)** | ~1° (95 %) |
 | leader episodes | 27–39 k | | |
 - With ease in/out a joint can end up to 0.5° inside the 3° guard (never closer than 2.5°).
+- **Robot (log-037):** PICO 60 Hz + 300°/s² episode: jerk 24.9 k (−45 %), step doubling 17 % (50 Hz: 61–63 %, leader: 12–17 %).
 
 ### Review at the end of the day (Elephant + Goldfish, log-035)
 | Problem found | Fix |
@@ -112,11 +117,11 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 
 **Robot tests (supervised, separate spotter)**
 - [x] Wall check on the **right** arm — PASS (55 walls, no lock, log-036); the stretched-arm wall was not reached (the joint_1 120° wall comes first)
-- [ ] 60 Hz + ease in/out (`HZ=60 ACC=300 bash scripts/gate4_sender.sh <tag>`) + a short PICO block to measure jerk
+- [x] 60 Hz + ease in/out — robot: jerk −45 %, as smooth as the leader (log-037); use `HZ=60 ACC=300` for PICO recording
 - [ ] Repeat R2 right wrist (roll right, pitch) using the pre-move (Enter)
 
 **Then data collection**
-- [ ] PICO block × 5 (left) with the wall
+- [ ] PICO block × 5 (left) with the wall and `HZ=60 ACC=300` (add `WRIST_MODE=1` if the wrist should turn)
 - [ ] After Kento-san's joint_7 fix: redo the leader block, then compare leader vs. PICO
 
 ## 6. Where things are
@@ -125,7 +130,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | Code | `~/projects/PICO-controller/pico_teleop/` (wall: `controller.py` `_edge`, `_hit_wall`, `_note_wall`; pre-move and video: `sender.py`, `video.py`) |
 | Scripts | `scripts/arm_session.sh left/right position/wrist` (`PREMOVE_CM=10`, `VIDEO=/dev/video4`), `scripts/gate4_sender.sh` (`HZ`, `ACC`), `scripts/video_check.sh`, `scripts/wrist_dry_run.sh` |
 | Offline tools | `tools/` (fastreplay, jerkbench, wristcheck, rotspeed, wristsim, frames.sh) |
-| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check); index `log/log.md` |
+| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test); index `log/log.md` |
 | Run records | `runs/pilot-pico-3-*`, `runs/wrist-left-20261101-*`, `runs/position-right-20261101-181616-*`, `runs/wrist-right-20261101-182038-*` |
 | Datasets (local only) | `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706` |
 | Safety runbook | `docs/hardware-runbook.md` (spotter card incl. walls and the pre-move) |

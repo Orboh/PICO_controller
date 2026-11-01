@@ -227,3 +227,14 @@ def test_premove_cancelled_by_a_squeeze():
     _tick(ch, 0.0, 1)
     _, ev = _tick(ch, 1.0, 2)
     assert ch.move is None and "cancelled" in (ev or "")
+
+
+def test_link_pauses_do_not_lock():
+    """log-037: two link losses within 30 s (lerobot-record saving episodes) FAULT but never lock."""
+    ch = _ch(0.0)
+    for k in range(3):
+        ch.arm.state = ENGAGED
+        out = ch.arm.force_fault("link lost: no echo from the receiver", count=False)
+        assert "LOCKED" not in (out.event or "")
+        ch.arm.state = HOLD
+    assert ch.arm.locked is None
