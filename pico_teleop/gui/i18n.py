@@ -61,6 +61,10 @@ TEXT: dict[str, tuple[str, str]] = {
                 "リーダーアームも動く / 最後に力が抜けます。操作者がリーダーアームを静かに持っていますか？"),
     "hands_yes": ("Yes, the leader arm is held still", "はい、静かに持っています"),
     "cancel": ("Cancel", "キャンセル"),
+    "b.abort": ("Abort recorder (Ctrl-C) — only when it does not end", "記録を中断（Ctrl-C）— 終わらないときだけ"),
+    "abort_q": ("Ctrl-C to the recorder. Is the follower arm OFF, or is the spotter supporting it?",
+                "記録プログラムに Ctrl-C。フォロワーアームの電源は切れているか、見守り役が支えていますか？"),
+    "abort_yes": ("Yes — abort the recorder", "はい — 中断する"),
     "live": ("Live status", "現在の状態"),
     "logs.session": ("Session log", "セッションの記録"), "logs.rec": ("Recorder output", "記録プログラムの出力"),
     "logs.tel": ("Teleop output / events", "テレオペの出力 / イベント"),
@@ -126,6 +130,10 @@ REFUSALS_JA: list[tuple[str, str]] = [
     ("a session needs a reviewed gate", "session の前に、確認者が OK した gate（10本）が必要です"),
     ("type the reviewer's name", "確認者の名前を入れてください"),
     ("no finished gate to review", "確認する gate がありません"),
+    ("the spotter must be a different person", "見守り役は操作者と別の人にしてください（腕のそばに2人目）"),
+    ("CAN link down", "CAN が落ちています。腕の電源は ON？ canup.sh（openarm-orboh）を実行してから ③ をもう一度"),
+    ("use End recording first", "先に「記録終了」を。終わらないときだけ中断"),
+    ("confirm: the follower arm is off", "確認: フォロワーアームの電源が切れているか支えている（Ctrl-C で電源の入った腕は力が抜ける）"),
     ("this tab only watches", "このタブは表示のみ（別のタブが操作中）"),
 ]
 EMERGENCY_JA = " — 緊急時は非常停止を（このページではない）。"

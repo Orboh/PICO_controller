@@ -42,6 +42,7 @@ class FakeSpawn:
 
 
 def _sess(tmp_path, **kw):
+    kw.setdefault("links", lambda m, side: [])
     return CollectionSession(runs_dir=tmp_path, spawn=kw.pop("spawn", FakeSpawn()), probe=lambda: [],
                              gng=kw.pop("gng", lambda side: (True, "ok")), **kw)
 
@@ -251,3 +252,24 @@ def test_checks_and_translations(tmp_path, monkeypatch):
     assert all(len(v) == 2 and v[1] for v in i18n.TEXT.values())
     assert i18n.refusal("the operator is still squeezing: release", "ja").startswith("操作者がまだ握って")
     assert i18n.t("arm", "ja", s="左") == "左腕"
+
+
+def test_spotter_differs_can_down_and_stuck_recorder(tmp_path):
+    s = _sess(tmp_path, links=lambda m, side: ["can_fol_l down"])
+    s.start_teleop(Options(**OPS))
+    assert _wait(lambda: s.sha_line()[1])
+    with pytest.raises(SessionError, match="different person"):
+        s.confirm_power("kento")
+    s.confirm_power("Suraj")
+    with pytest.raises(SessionError, match="CAN link down"):
+        s.start_recorder()
+    s.links = lambda m, side: []
+    s.recorder_used = False
+    s.start_recorder()
+    s._recorder_line("ConnectionError: Failed to connect to CAN bus: Network is down")
+    assert s.recorder_stuck() and "RECORDER FAILED" in s.alarm
+    with pytest.raises(SessionError, match="confirm"):
+        s.abort_recorder()
+    s.abort_recorder(confirmed=True)
+    assert _wait(lambda: not s.recorder_running)
+    s.teleop.proc.kill()

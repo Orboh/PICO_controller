@@ -298,6 +298,20 @@ def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md"
 REVIEWS = REPO / "runs" / "gui-reviews.json"
 
 
+def links_down(method: str, side: str) -> list[str]:
+    """CAN interfaces that are not up: the follower's, and the leader's for the leader method."""
+    names = [f"can_fol_{side[0]}"] + ([f"can_lead_{side[0]}"] if method == "leader" else [])
+    down = []
+    for n in names:
+        try:
+            state = (pathlib.Path("/sys/class/net") / n / "operstate").read_text().strip()
+        except OSError:
+            state = "missing"
+        if state not in ("up", "unknown"):
+            down.append(f"{n} {state}")
+    return down
+
+
 def load_reviews(path: pathlib.Path = REVIEWS) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -310,9 +324,13 @@ class CollectionSession:
 
     def __init__(self, runs_dir: pathlib.Path = REPO / "runs", spawn: Callable[..., PtyChild] = PtyChild,
                  probe: Callable[[], list[str]] = other_senders, facing: Callable[[list], float | None] | None = None,
-                 gng: Callable[[str], tuple[bool, str]] | None = None, reviews: pathlib.Path | None = None):
+                 gng: Callable[[str], tuple[bool, str]] | None = None, reviews: pathlib.Path | None = None,
+                 links: Callable[[str, str], list[str]] | None = None):
         self.runs_dir, self.spawn, self.probe, self.facing = runs_dir, spawn, probe, facing
         self.gng = gng or (lambda side: go_no_go_today(side=side))
+        self.links = links or links_down        # CAN links that must be up before ③ (log-041)
+        self.recorder_error = ""                 # the recorder printed a Python error before any episode
+        self.end_pressed_at: float | None = None
         self.reviews_path = reviews or (runs_dir / "gui-reviews.json")
         self.gate_done: dict | None = None    # a finished gate waiting for the reviewer's OK
         self.opts = Options()
@@ -401,6 +419,8 @@ class CollectionSession:
             raise SessionError("start the teleop first (rule R2: sender, then power, then the follower)")
         if not OPERATOR_NAME.fullmatch(spotter.strip()):
             raise SessionError("type the spotter's name: the spotter confirms, not the page operator")
+        if spotter.strip().casefold() == self.opts.operator.casefold():
+            raise SessionError("the spotter must be a different person from the operator (runbook: a second person at the arm)")
         if self.recorder_used:
             raise SessionError("this teleop already had a recorder: ④ stop the teleop and start again (rule R2)")
         self.spotter, self.power_confirmed = spotter.strip(), True
@@ -419,8 +439,11 @@ class CollectionSession:
             sha, ok = self.sha_line()
             if not ok:
                 raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {EXPECTED_SHA[self.opts.side]}")
+        down = self.links(self.opts.method, self.opts.side)
+        if down:
+            raise SessionError("CAN link down: " + ", ".join(down) + " — arm power on? run canup.sh (openarm-orboh), then try ③ again")
         argv, env = recorder_command(self.opts)
-        self.recorder_used = True
+        self.recorder_used, self.recorder_error, self.end_pressed_at = True, "", None
         self.recorder = self.spawn(argv, env=env, on_line=self._recorder_line)
         self._recorder_was_alive = True
         self._note("③ recorder started: THE ARM MOVES BY ITSELF to the start pose")
@@ -438,6 +461,8 @@ class CollectionSession:
         if name in ("stop", "reset") and self.opts.method == "leader" and not hands_off:
             raise SessionError("leader method: confirm the leader arm is held still / hands ready (R4)" + EMERGENCY)
         self.recorder.send(KEYS[name])
+        if name == "stop":
+            self.end_pressed_at = time.monotonic()
         if name == "rerecord" and self.episode is not None:
             with self._lock:
                 self.notes.pop(self.episode, None)       # the discarded take's notes go with it
@@ -475,6 +500,22 @@ class CollectionSession:
             raise SessionError("the sender must be in HOLD (grip released) with a fresh status")
         self.teleop.send(b"\n")
         self._note(f"pre-move: the arm moves {self.opts.premove_cm:g} cm forward slowly")
+
+    def recorder_stuck(self) -> bool:
+        """The recorder failed before any episode, or did not end 10 s after End recording (log-041)."""
+        return self.recorder_running and (bool(self.recorder_error) or
+                                          (self.end_pressed_at is not None and time.monotonic() - self.end_pressed_at > 10.0))
+
+    def abort_recorder(self, confirmed: bool = False) -> None:
+        """Ctrl-C to the recorder (only when it is stuck). A powered follower goes limp: the spotter supports it."""
+        if not self.recorder_running:
+            raise SessionError("the recorder is not running")
+        if not self.recorder_stuck():
+            raise SessionError("use End recording first; abort only when the recorder does not end")
+        if not confirmed:
+            raise SessionError("confirm: the follower arm is off or supported (Ctrl-C makes a powered follower go limp)")
+        self.recorder.interrupt()
+        self._note("recorder aborted (Ctrl-C) after it did not end" + (f": {self.recorder_error}" if self.recorder_error else ""))
 
     def stop_teleop(self, leader_held: bool = False) -> None:
         """Ctrl-C to the teleop child. Order: recorder first (rule R2/R4). Leader: the leader arm must be held."""
@@ -588,6 +629,9 @@ class CollectionSession:
                 self._wall_at_start = self.monitor.status.wall_s if self.monitor else 0.0
         elif WAITING.search(text):
             self.recording_now = False
+        if self.episode is None and re.match(r"\w*(Error|Exception)\b.*:", text):
+            self.recorder_error = text[:160]          # e.g. "ConnectionError: Failed to connect to CAN bus: …"
+            self.alarm = f"RECORDER FAILED: {self.recorder_error} — press Abort recorder, then ④"
         r = RUN_DIR.search(text)
         if r:
             self.run_dir = r.group(1)

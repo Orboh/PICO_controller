@@ -215,6 +215,12 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                     k_reset = tx(ui.button(on_click=lambda: leader_key("reset")).classes("grow"), "b.reset")
                     k_stop = tx(ui.button(on_click=lambda: leader_key("stop")).classes("grow"), "b.end")
                 b_pre = tx(ui.button(on_click=lambda: act(sess.premove)).classes("w-full"), "b.pre")
+                with ui.dialog() as abort_dialog, ui.card():
+                    tx(ui.label(), "abort_q")
+                    with ui.row():
+                        tx(ui.button(on_click=lambda: (abort_dialog.close(), act(sess.abort_recorder, confirmed=True, ok="Ctrl-C"))).props("color=negative"), "abort_yes")
+                        tx(ui.button(on_click=abort_dialog.close), "cancel")
+                b_abort = tx(ui.button(on_click=abort_dialog.open).classes("w-full").props("color=negative outline"), "b.abort")
                 ui.separator()
 
                 with ui.dialog() as held_dialog, ui.card():
@@ -358,6 +364,7 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
         b_pre.set_visibility(sess.opts.method == "pico" and sess.opts.premove_cm > 0 and tel)
         enable(b_pre, rec and not sess.recording_now)
         enable(b_stop, tel and not rec)
+        b_abort.set_visibility(sess.recorder_stuck() and mine())
         now_step.text = L("now") + L("s.teleop" if not tel and not rec else "s.stop" if sess.recorder_used and not rec else
                                      "s.power" if not sess.power_confirmed else "s.rec" if not rec else
                                      "s.ep" if sess.recording_now else "s.wait")
