@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-035`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-036`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -20,6 +20,7 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 | R2 wrist | right | Kento-san / Suraj | roll and pitch | roll left OK; roll right hit joint_2 → **LOCKED**; pitch not reached | log-029 |
 | Wall check 1 | left | — / Suraj | push into the edges | 5 walls, none FAULTed; locked from the wrist-turning side → fixed | log-033 |
 | Wall check 2 | left | — / Suraj | push into the edges for 7 min | **PASS: 63 squeezes, 94 walls, 1 real tracking FAULT, no lock** | log-034 |
+| Wall check right | right | (operator) / Suraj | joint limit, reach forward, re-squeeze, fast wrist turn | **PASS: 25 squeezes, 55 walls, no lock** (only FAULT: link lost because `esc` was pressed while still squeezing) | log-036 |
 
 Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall behaviour). **To do: a written OK in Slack.**
 
@@ -29,9 +30,9 @@ Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall be
 | joint_1 drift limit 120° | tests + replay | ✅ ep 0 swung ~105° without a FAULT |
 | Wrist follows the hand 1:1 (roll, pitch, yaw) | tests, dry run | ✅ left (command = hand on every turn); right roll left |
 | Right arm directions | dry run | ✅ R1 (spotter) |
-| Walls: joint limit, drift, wrist turning | ✅ | ✅ wall check 2 (no lock) |
-| Walls: stretched arm, out of reach, joint jump | ✅ | ❌ not seen on the robot yet |
-| Walls on the right arm | ✅ | ❌ |
+| Walls: joint limit, drift, wrist turning | ✅ | ✅ left and right arm (no lock) |
+| Walls: posture (60° per squeeze), wrist cannot keep the hand's rotation | ✅ | ✅ right arm |
+| Walls: stretched arm, out of reach, joint jump | ✅ | ❌ not seen on the robot: reaching forward, the joint_1 120° wall stops the arm first |
 | Pre-move: Enter moves the arm 10 cm forward slowly | tests | ❌ not used yet |
 | 60 Hz + ease in/out (jerk) | ✅ −44…66 % jerk | ❌ |
 | Video on/off from the controller | tests | ❌ not used (decision) |
@@ -110,7 +111,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
 
 **Robot tests (supervised, separate spotter)**
-- [ ] Wall check on the **right** arm, incl. one slow reach into the stretched-arm wall
+- [x] Wall check on the **right** arm — PASS (55 walls, no lock, log-036); the stretched-arm wall was not reached (the joint_1 120° wall comes first)
 - [ ] 60 Hz + ease in/out (`HZ=60 ACC=300 bash scripts/gate4_sender.sh <tag>`) + a short PICO block to measure jerk
 - [ ] Repeat R2 right wrist (roll right, pitch) using the pre-move (Enter)
 
