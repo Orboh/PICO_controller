@@ -91,11 +91,28 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 
 The sender prints the state of each arm once per second and every event as it happens.
 
+## Collection GUI (log-038): leader arm or PICO, one page
+```bash
+bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC
+```
+![collection GUI](docs/img/collection-gui.png)
+- **1 Setup**: method (PICO / leader arm), arm (left / right), episodes, seconds, operator, task; PICO: smooth motion
+  (60 Hz + ease in/out, on), wrist rotation, pre-move distance.
+- **2 Run, in this order**: ① Start teleop (PICO sender or leader agent) → ② spotter says "arm may move" and switches
+  the arm's power on, then presses the button → ③ Start recording (the arm moves to the start pose) → ▶ Next episode /
+  ↺ Re-record / ⟲ Reset / ■ Stop recording (the recorder's → ← a Esc) → ④ Stop teleop.
+- Refused by the page: a start while another sender / leader agent / recorder runs; recording before the spotter
+  confirmed; a wrong start-pose sha (PICO); **Stop recording while the operator squeezes (R4)**; stopping the teleop
+  while recording; stopping the leader agent without "the leader arm is held".
+- **Live status** (PICO): HOLD / ENGAGED / FAULT / LOCKED, link, PICO input rate, facing, current WALL, wall time;
+  **Episodes**: grasp / placed / note per episode with wall time, saved to `runs/gui-<method>-<arm>-<time>-notes.json`.
+- The page never switches power; the spotter keeps the e-stop and the switch. Only on 127.0.0.1 by default.
+
 ## Setup (once per PC)
 
 ```bash
 cd ~/projects/PICO-controller
-uv venv --python 3.10 .venv && uv pip install --python .venv/bin/python "pin==4.1.0" "numpy<2.3" pyzmq pyyaml pytest matplotlib
+uv venv --python 3.10 .venv && uv pip install --python .venv/bin/python "pin==4.1.0" "numpy<2.3" pyzmq pyyaml pytest matplotlib "nicegui>=2,<3"
 bash scripts/test.sh -q          # offline tests, no hardware
 ```
 The SDK is the py3.10 build in `~/Desktop/XRoboToolkit-PC-Service-Pybind` (commit 75cb113).
