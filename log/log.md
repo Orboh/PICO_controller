@@ -36,3 +36,4 @@ Rules for this folder:
 | [log-026.md](log-026.md) | What guides the robot: controller pose → IK, the robot elbow is chosen by the program (not the human elbow); widely used methods with sources; review fixes (20° wrist turns FAULT offline → 10° only; `arm_session.sh`; right-arm runbook); plan 0 / W1 / R1 / R2. |
 | [log-027.md](log-027.md) | W1 left wrist: yaw OK; roll/pitch hit joint_6 at the start pose → LOCKED; room per direction (10 cm forward is best); W1b from forward: roll ±38°, pitch ±15° commanded 1:1, 0 FAULTs. |
 | [log-028.md](log-028.md) | Pre-move for wrist tests: Enter in terminal A moves the arm 10 cm forward at 10°/s with the same gripper rotation (`premove_forward`, `PREMOVE_CM`); path never below the start height; 104 tests; not yet on the arm. |
+| [log-029.md](log-029.md) | R1 right arm, position only (Kento-san / Suraj): 13 squeezes, 0 FAULTs, all commanded directions right; "no roll" = position mode by design → R2 wrist with pre-move. |
