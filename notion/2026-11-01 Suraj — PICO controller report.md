@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `a974dca`, not pushed) · Logs `log/log-025` … `log-041`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `6945a98`, not pushed) · Logs `log/log-025` … `log-042`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -114,6 +114,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [ ] joint_7 leader/follower start offset (~89°): needed for a fair leader vs. PICO comparison
 - [ ] Left start pose with more room for joint_2 (most common wall: 43 of 94)
 - [ ] Confirm the follower branch `feat/takeei-wood-l1` as the one to use
+- [ ] Proposal: a command channel in the lerobot record loop instead of typed keys (Slack draft in §3, website part)
 
 **Decision to make — owner: Suraj**
 - [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
@@ -141,6 +142,15 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - Reviewed by Elephant (16 findings) and Goldfish (10); 3 blockers fixed (one recording per teleop start, crashed-sender status, go/no-go enforced).
 - Start: `bash ~/projects/PICO-controller/scripts/gui.sh` → http://localhost:8090.
 - **Headset-only check (log-041):** ① from the page worked (PICO ~53 Hz, correct start pose, HOLD, notes saved). ③ was pressed with the follower CAN link down: the recorder failed at once ("Network is down", the arm never moved) and then hung; it had to be stopped with Ctrl-C. Fixed: ② refuses the same person as operator and spotter; ③ refuses while the follower (or leader) CAN link is down; a red "RECORDER FAILED" banner and an "Abort recorder (Ctrl-C)" button (only when the recorder fails or does not end).
+- **Recorder keys bug (log-042):** the page's ▶ / ■ did nothing because, with a desktop `DISPLAY`, lerobot reads → ← Esc from the PC's keyboard (any window), not from its terminal. Fixed with the existing key method: the recorder is started without `DISPLAY` (page and our scripts), the same as `collect_bimanual.sh` already does. Test with lerobot's real key reader.
+
+**Slack message to Kento-san (draft, to post in Slack):**
+
+> Kento-san, a proposal for the recorder (lerobot fork), from Suraj.
+> All our collection programs control `lerobot-record` only by keys (→ next/end, ← discard, a return, Esc stop): `record_pick_place_openarm.sh`, `record_bimanual_openarm.sh`, `collect_bimanual.sh`, the viser Collect tab (types keys into a pty) and our new PICO/leader collection website (same). With a desktop `DISPLAY` the keys come from the global keyboard (pynput); `collect_bimanual.sh` avoids it with `env -u DISPLAY` (line 141), our single-arm path did not (fixed today, log-042).
+> **Proposal:** a small command channel in the record loop (e.g. a local socket or a FIFO next to the run folder) that sets the same `events` flags as the keys (`exit_early`, `rerecord_episode`, `align_start_pose`, `stop_recording`) and reports the state back (waiting / recording episode N / saving). Keys stay as they are; pages and scripts could then call real functions instead of typing keys, and know the recorder's state without parsing the console.
+> Key files: lerobot `src/lerobot/common/control_utils.py` (`init_keyboard_listener`, `_init_stdin_key_listener`), `src/lerobot/scripts/lerobot_record.py` (record loop, waiting / save / start-pose gate); openarm-orboh `scripts/collect_bimanual.sh` (line 141), `scripts/record_pick_place_openarm.sh`; Dream-Lab-OpenArm `october 23/workspace/collect.py` (`KEYS`, pty); PICO-controller `pico_teleop/gui/session.py` (`KEYS`, `PtyChild`, `recorder_command`), log-042.
+> No change needed now; would you consider it for the fork? (日本語: 収集の各プログラムはキー入力でしか lerobot-record を操作できないので、record ループに小さなコマンド経路を足す提案です。キー操作はそのまま残ります。)
 
 ## 6. Where things are
 | What | Location |
@@ -148,7 +158,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | Code | `~/projects/PICO-controller/pico_teleop/` (wall: `controller.py` `_edge`, `_hit_wall`, `_note_wall`; pre-move and video: `sender.py`, `video.py`) |
 | Scripts | `scripts/arm_session.sh left/right position/wrist` (`PREMOVE_CM=10`, `VIDEO=/dev/video4`), `scripts/gate4_sender.sh` (`HZ`, `ACC`), `scripts/video_check.sh`, `scripts/wrist_dry_run.sh` |
 | Offline tools | `tools/` (fastreplay, jerkbench, wristcheck, rotspeed, wristsim, frames.sh) |
-| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-041` (website); index `log/log.md` |
+| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-042` (website); index `log/log.md` |
 | Run records | `runs/pilot-pico-3-*`, `runs/wrist-left-20261101-*`, `runs/position-right-20261101-181616-*`, `runs/wrist-right-20261101-182038-*` |
 | Datasets (local only) | `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706` |
 | Safety runbook | `docs/hardware-runbook.md` (spotter card incl. walls and the pre-move) |
