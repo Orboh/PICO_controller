@@ -30,12 +30,14 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 METHODS = ("pico", "leader")
 STAGES = ("dry", "gate", "session")       # the Collect tab's pipeline (instructions §3.3): check, 10 for review, collect
 STAGE_EPISODES = {"dry": 2, "gate": 10}
-SIDES = ("left", "right")
+SIDES = ("left", "right", "both")
+ORBOH = pathlib.Path("~/projects/openarm-orboh").expanduser()
+BIMANUAL_ENV = ORBOH / "config" / "bimanual-collect.kitakyushu_takeei_sort.env"   # the Collect tab's default task file
 KEYS = {"next": b"\x1b[C", "rerecord": b"\x1b[D", "reset": b"a", "stop": b"\x1b"}
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\r")
 RECORDING = re.compile(r"Recording episode (\d+)|録画中 episode (\d+)")   # an episode starts (fork's banner, 2026-10)
 WAITING = re.compile(r"Waiting:|Escape key pressed")                       # an episode ended (lerobot fork log line)
-RUN_DIR = re.compile(r"\[record\] 記録: (\S+)")                            # printed at the end (console.log 11-01)
+RUN_DIR = re.compile(r"\[record(?:-bi)?\] 記録: (\S+)")                    # printed at the end (single arm / bimanual)
 SHA = re.compile(r"sha256 ([0-9a-f]{12})")
 EXPECTED_SHA = {"left": "2ec31fb82bf0", "right": "a3b97b8e9d66"}
 OTHER_SENDERS = ("pico_teleop.sender", "leader_agent", "run_leader_agent", "lerobot-record", "lerobot-teleoperate")
@@ -62,10 +64,21 @@ class Options:
     smooth: bool = True        # PICO: --hz 60 --max-joint-acc-dps2 300 (log-037)
     wrist: bool = False        # PICO: --orientation
     premove_cm: float = 0.0    # PICO: Enter moves the arm forward (log-028)
+    tag: str = ""              # both arms, session only: collect_bimanual.sh tag suffix (e.g. s2)
+    scene: str = "none"        # one arm, gate/session: an openarm-orboh scenes/<name>.yaml (dry: none)
+
+
+def bimanual_leader(o: Options) -> bool:
+    """Both arms with the leader arms: the team's collect_bimanual.sh reads the leader arms itself (log-043)."""
+    return o.method == "leader" and o.side == "both"
 
 
 def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO) -> list[str]:
-    """The teleop child: the PICO sender (with its JSONL log) or the leader agent."""
+    """The teleop child: the PICO sender (with its JSONL log) or the leader agent. Both arms with the leader: a
+    placeholder that only waits (the recorder connects both leader arms itself, like the Collect tab)."""
+    if bimanual_leader(o):
+        return ["bash", "-c", "echo '[gui] both arms: the leader arms are read by collect_bimanual.sh (no leader agent)'; "
+                "exec sleep infinity"]
     if o.method == "leader":
         return ["bash", str(repo / "scripts" / "leader_sender.sh"), o.side]
     # 30 s link pause (episode saves pause the receiver 1-6 s); one recorder per sender start is enforced, so a
@@ -90,9 +103,22 @@ def repo_id(o: Options) -> str:
 
 
 def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], dict[str, str]]:
-    """The recorder child: `pilot_record.sh` unchanged (same dataset settings for both methods)."""
+    """The recorder child: `pilot_record.sh` (one arm, both methods) or, for both arms with the leader arms,
+    openarm-orboh `collect_bimanual.sh <dry|gate|session> [tag] [n]` exactly as the Collect tab runs it."""
+    if bimanual_leader(o):
+        argv = ["bash", str(ORBOH / "scripts" / "collect_bimanual.sh"), o.stage]
+        if o.stage == "session":
+            argv.append(o.tag.strip())
+        argv.append(str(int(o.episodes)))
+        env = {"ENV_FILE": str(BIMANUAL_ENV), "OPERATOR": o.operator.strip(), "EPISODE_TIME_S": str(int(o.episode_time_s)),
+               "PLAY_SOUNDS": "true", "BILATERAL_FEEDBACK": "true", "SAVE_ON_EPISODE_END": "true",
+               "RETURN_ON_EPISODE_END": "true", "START_POSE_HOLD": "true", "START_COUNTDOWN_S": "3",
+               "L_BILATERAL_GRIPPER_KP": "1.25", "L_BILATERAL_GRIPPER_KD": "0.06",   # the Collect tab's runbook values
+               "DISPLAY": None, "WAYLAND_DISPLAY": None}
+        return argv, env
     env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip(),
-           "REPO_ID": repo_id(o),
+           "REPO_ID": repo_id(o), "SCENE": "none" if o.stage == "dry" else o.scene.strip(),
+           "TAG": f"{o.method}-{o.side}-{o.stage}",                 # run folder ~/collections/<UTC>-<tag> (Elephant 11-01 #6)
            # log-042: with a desktop DISPLAY lerobot reads → ← Esc from the GLOBAL keyboard (pynput), not from its
            # terminal, so the page's keys were ignored (only `a` arrived). Without a display it reads the terminal.
            "DISPLAY": None, "WAYLAND_DISPLAY": None}
@@ -296,7 +322,8 @@ def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md"
                 bad.append(cells[0])
     if bad:
         return False, "go/no-go items not PASS: " + ", ".join(bad)
-    if side and side not in item5.lower():
+    need = ("left", "right") if side == "both" else ((side,) if side else ())
+    if any(x not in item5.lower() for x in need):
         return False, f"go/no-go item 5 does not approve the {side} arm today ({item5[:60]})"
     return True, "all items PASS" + (f" · item 5: {item5[:70]}" if item5 else "")
 
@@ -306,7 +333,8 @@ REVIEWS = REPO / "runs" / "gui-reviews.json"
 
 def links_down(method: str, side: str) -> list[str]:
     """CAN interfaces that are not up: the follower's, and the leader's for the leader method."""
-    names = [f"can_fol_{side[0]}"] + ([f"can_lead_{side[0]}"] if method == "leader" else [])
+    sides = ["l", "r"] if side == "both" else [side[0]]
+    names = [f"can_fol_{x}" for x in sides] + ([f"can_lead_{x}" for x in sides] if method == "leader" else [])
     down = []
     for n in names:
         try:
@@ -336,9 +364,11 @@ class CollectionSession:
         self.gng = gng or (lambda side: go_no_go_today(side=side))
         self.links = links or links_down        # CAN links that must be up before ③ (log-041)
         self.recorder_error = ""                 # the recorder printed a Python error before any episode
+        self.keys_from_page: bool | None = None  # lerobot said it reads keys from its terminal (log-042 check)
+        self.saved_episodes: int | None = None   # from the run folder's manifest after the recorder exits
         self.end_pressed_at: float | None = None
         self.reviews_path = reviews or (runs_dir / "gui-reviews.json")
-        self.gate_done: dict | None = None    # a finished gate waiting for the reviewer's OK
+        self.gate_done: dict | None = load_reviews(self.reviews_path).get("pending")  # a complete gate waiting for the OK
         self.opts = Options()
         self.teleop: PtyChild | None = None
         self.recorder: PtyChild | None = None
@@ -397,7 +427,15 @@ class CollectionSession:
             raise SessionError("type the operator's name in latin letters (it goes into the dataset)")
         if o.stage not in STAGES:
             raise SessionError("choose a method and an arm")
-        if o.stage == "session" and not self.gate_ok(o.method, o.side):
+        if o.method == "pico" and o.side == "both":
+            raise SessionError("both arms with the PICO needs a two-arm remote receiver in lerobot (not there yet): "
+                               "use one arm, or the leader arms for both")
+        if bimanual_leader(o) and o.stage == "session" and not re.fullmatch(r"[A-Za-z0-9-]+", o.tag.strip()):
+            raise SessionError("both arms, session: type a tag (letters, digits, -), e.g. s2")
+        if not bimanual_leader(o) and o.stage != "dry" and (o.scene.strip() in ("", "none")
+                                                            or not (ORBOH / "scenes" / f"{o.scene.strip()}.yaml").exists()):
+            raise SessionError("gate / session need a scene profile (openarm-orboh scenes/<name>.yaml), not 'none'")
+        if o.stage == "session" and not self.gate_ok(o.method, o.side, o.task):
             raise SessionError(f"a session needs a reviewed gate of 10 for {o.method} / {o.side} first: record a gate, "
                                "show it to the reviewer, record their OK")
         ok, why = self.gng(o.side)
@@ -407,6 +445,10 @@ class CollectionSession:
         if busy:
             raise SessionError("another program already drives an arm: " + ", ".join(busy) + " (stop it first, rule R2)")
         self.opts = dataclasses.replace(o, operator=o.operator.strip())
+        if o.stage == "gate":                       # a new gate cancels the old OK (the Collect tab's rule)
+            data = load_reviews(self.reviews_path)
+            if data.pop(f"{o.method}_{o.side}", None) is not None:
+                self.reviews_path.write_text(json.dumps(data, indent=1), encoding="utf-8")
         self.tag = f"gui-{o.method}-{o.side}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         log_path = self.runs_dir / f"{self.tag}-sender.jsonl"
         self._sha = None
@@ -425,7 +467,7 @@ class CollectionSession:
             raise SessionError("start the teleop first (rule R2: sender, then power, then the follower)")
         if not OPERATOR_NAME.fullmatch(spotter.strip()):
             raise SessionError("type the spotter's name: the spotter confirms, not the page operator")
-        if spotter.strip().casefold() == self.opts.operator.casefold():
+        if spotter.strip().casefold() == self.opts.operator.strip().casefold():
             raise SessionError("the spotter must be a different person from the operator (runbook: a second person at the arm)")
         if self.recorder_used:
             raise SessionError("this teleop already had a recorder: ④ stop the teleop and start again (rule R2)")
@@ -442,7 +484,7 @@ class CollectionSession:
         if self.locked():
             raise SessionError("the sender is LOCKED: stop the teleop (④) and start again" + EMERGENCY)
         if self.opts.method == "pico":
-            sha, ok = self.sha_line()
+            sha, ok = self.sha_line()  # one arm only (PICO both arms is refused at ①)
             if not ok:
                 raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {EXPECTED_SHA[self.opts.side]}")
         down = self.links(self.opts.method, self.opts.side)
@@ -450,6 +492,7 @@ class CollectionSession:
             raise SessionError("CAN link down: " + ", ".join(down) + " — arm power on? run canup.sh (openarm-orboh), then try ③ again")
         argv, env = recorder_command(self.opts)
         self.recorder_used, self.recorder_error, self.end_pressed_at = True, "", None
+        self.keys_from_page, self.saved_episodes = None, None
         self.recorder = self.spawn(argv, env=env, on_line=self._recorder_line)
         self._recorder_was_alive = True
         self._note("③ recorder started: THE ARM MOVES BY ITSELF to the start pose")
@@ -478,9 +521,12 @@ class CollectionSession:
                     "stop": "esc: end recording (the arm returns and goes limp)"}[name])
         self.save_notes()
 
-    def gate_ok(self, method: str, side: str) -> dict | None:
+    def gate_ok(self, method: str, side: str, task: str | None = None) -> dict | None:
+        """A reviewed, complete gate for this method + arm (+ the same task text when given)."""
         r = load_reviews(self.reviews_path).get(f"{method}_{side}")
-        return r if r and r.get("reviewer") else None
+        if not r or not r.get("reviewer"):
+            return None
+        return r if task is None or r.get("task") in (None, task) else None
 
     def record_review(self, reviewer: str) -> None:
         """The reviewer looked at the finished gate and gave the OK (the Collect tab's V4 rule)."""
@@ -489,6 +535,7 @@ class CollectionSession:
         if not self.gate_done:
             raise SessionError("no finished gate to review")
         data = load_reviews(self.reviews_path)
+        data.pop("pending", None)
         data[f"{self.gate_done['method']}_{self.gate_done['side']}"] = {
             **self.gate_done, "reviewer": reviewer.strip(), "ok_at": dt.datetime.now().isoformat(timespec="seconds")}
         self.reviews_path.write_text(json.dumps(data, indent=1), encoding="utf-8")
@@ -508,9 +555,10 @@ class CollectionSession:
         self._note(f"pre-move: the arm moves {self.opts.premove_cm:g} cm forward slowly")
 
     def recorder_stuck(self) -> bool:
-        """The recorder failed before any episode, or did not end 10 s after End recording (log-041)."""
+        """The recorder failed before any episode, or did not end 60 s after End recording (saving the last episode
+        took up to 22 s in real runs; Elephant 11-01 #2)."""
         return self.recorder_running and (bool(self.recorder_error) or
-                                          (self.end_pressed_at is not None and time.monotonic() - self.end_pressed_at > 10.0))
+                                          (self.end_pressed_at is not None and time.monotonic() - self.end_pressed_at > 60.0))
 
     def abort_recorder(self, confirmed: bool = False) -> None:
         """Ctrl-C to the recorder (only when it is stuck). A powered follower goes limp: the spotter supports it."""
@@ -599,10 +647,20 @@ class CollectionSession:
                 self._flag("recorder exited")
             self.recording_now, self.power_confirmed = False, False
             self._read_manifest()
-            if self.opts.stage == "gate":
+            if (self.opts.stage == "gate" and code == 0 and self.saved_episodes is not None
+                    and self.saved_episodes >= self.opts.episodes):     # only a complete gate can be reviewed (Elephant #1)
                 self.gate_done = {"method": self.opts.method, "side": self.opts.side, "tag": self.tag, "dataset": self.dataset,
-                                  "episodes": len(self.notes)}
-            self._note(f"recorder exited (code {code}); next: ④ stop the teleop" + (f"; data: {self.dataset}" if self.dataset else ""))
+                                  "episodes": self.saved_episodes, "task": self.opts.task}
+                data = load_reviews(self.reviews_path)
+                data["pending"] = self.gate_done
+                self.reviews_path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            elif self.opts.stage == "gate":
+                self._note(f"gate not complete (exit {code}, saved {self.saved_episodes} of {self.opts.episodes}): no review")
+            saved = (f"; SAVED {self.saved_episodes} of {self.opts.episodes} episodes" if self.saved_episodes is not None
+                     else "; saved episodes unknown (no manifest)")
+            self._note(f"recorder exited (code {code}){saved}; next: ④ stop the teleop" + (f"; data: {self.dataset}" if self.dataset else ""))
+            if not self.alarm and (self.saved_episodes or 0) == 0:
+                self.alarm = "NO EPISODE WAS SAVED in this recording: check the recorder output before going on"
             self.save_notes()
 
     def _flag(self, why: str) -> None:
@@ -616,7 +674,10 @@ class CollectionSession:
             return
         try:
             m = json.loads((pathlib.Path(self.run_dir) / "manifest.json").read_text(encoding="utf-8"))
-            self.dataset = (m.get("artifacts") or {}).get("dataset_root") or self.dataset
+            art = m.get("artifacts") or {}
+            self.dataset = art.get("dataset_root") or self.dataset
+            if art.get("episodes_recorded") is not None:
+                self.saved_episodes = int(art["episodes_recorded"])
         except (OSError, ValueError):
             pass
 
@@ -635,6 +696,10 @@ class CollectionSession:
                 self._wall_at_start = self.monitor.status.wall_s if self.monitor else 0.0
         elif WAITING.search(text):
             self.recording_now = False
+        if "No display detected: reading recording control keys from stdin" in text:
+            self.keys_from_page = True
+        elif "pynput" in text.lower() and self.keys_from_page is None:
+            self.keys_from_page = False
         if self.episode is None and re.match(r"\w*(Error|Exception)\b.*:", text):
             self.recorder_error = text[:160]          # e.g. "ConnectionError: Failed to connect to CAN bus: …"
             self.alarm = f"RECORDER FAILED: {self.recorder_error} — press Abort recorder, then ④"

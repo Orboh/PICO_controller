@@ -6,14 +6,20 @@ cd ~/projects/PICO-controller
 uv venv --python 3.10 .venv && uv pip install --python .venv/bin/python "pin==4.1.0" "numpy<2.3" pyzmq pyyaml pytest matplotlib "nicegui>=2,<3"
 bash scripts/test.sh -q        # offline tests, no hardware
 ```
-Also needed: the PICO setup (`docs/pico-working-setup.md`), openarm-orboh (recorder, leader agents, pose sets),
-lerobot with its venv (recorder, RealSense).
+Also needed (as on the operator PC on 2026-11-01): the PICO setup (`docs/pico-working-setup.md`);
+`~/projects/openarm-orboh` on `feat/takeei-wood-l1` @ e98e987 (recorder scripts, leader agents, pose sets, `scenes/`,
+`canup.sh`); `~/projects/lerobot` on `feat/bi-openarm-soft-move-to` with its `.venv` (recorder, RealSense). Branches to be
+confirmed by Kento-san. Safety: `docs/hardware-runbook.md` (go/no-go, R1-R4, spotter card) and the OpenArm safety protocol
+(Notion; archived copy in `notion/`). The **spotter fills today's go/no-go column** in the runbook before the session.
 
 ## Start
 ```bash
 bash ~/projects/PICO-controller/scripts/gui.sh     # open http://localhost:8090 on this PC (only this PC can open it)
 ```
 English / 日本語: the button at the top right. Only one browser tab controls; other tabs watch ("Take control here").
+**After every code update, restart the page** (Ctrl-C, then `gui.sh` again): the page runs the code it was started with.
+Check in the recorder status line: **"keys from this page ✅"** (lerobot says "No display detected: reading recording
+control keys from stdin"). If it says "keys NOT from this page", end the recording and restart the page.
 
 ## People
 | Role | Does |
@@ -27,15 +33,22 @@ English / 日本語: the button at the top right. Only one browser tab controls;
    PICO: PC on Wi-Fi `orboh`, PC Service running, 3D demo closed, headset answers, PICO data (button "Test PICO input");
    leader: leader arm CAN up; both: follower CAN up, cameras (button), today's go/no-go all PASS, no other sender.
    Red items show what to do. Fix them before ①.
-- **Card 1 — Setup**: method (PICO → follower / Leader arm → follower), arm, **stage**, episodes, seconds, operator name, task
-   (same text for both methods); PICO: smooth motion (on), wrist rotation, pre-move.
+- **Card 1 — Setup**: method (PICO → follower / Leader arm → follower), arm (**left / right / both**), **stage**, episodes,
+   seconds, operator name, task (same text for both methods), **scene** (gate/session, one arm: an openarm-orboh
+   `scenes/<name>.yaml`); PICO: smooth motion (on), wrist rotation, pre-move.
+   - **Both arms**: with the leader arms only. The page runs the team's `collect_bimanual.sh <dry|gate|session> [tag] [n]`
+     exactly like the Collect tab (its task file `config/bimanual-collect.kitakyushu_takeei_sort.env`, its dataset names,
+     its 4-CAN check); ① only prepares (no leader agent: the recorder reads both leader arms itself). A session needs a
+     tag (e.g. `s2`). **Both arms with the PICO is not possible yet** (lerobot has no two-arm remote receiver).
    - **dry** = 2 throw-away episodes to check everything (dataset `…_tmp`);
-   - **gate** = 10 episodes for review (dataset `Orboh/openarm_<method>_<arm>_gate_<time>`); afterwards the
-     **Gate review** card asks for the reviewer's name and OK;
-   - **session** = the real collection (`…_session_<time>`), only after a reviewed gate for the same method and arm.
+   - **gate** = 10 episodes for review (dataset `Orboh/openarm_<method>_<arm>_gate` + the recorder's
+     `_YYYYmmdd_HHMMSS`); **only a complete gate** (recorder exit 0 and all episodes saved) shows the **Gate review**
+     card (reviewer's name + OK); a new gate cancels the previous OK;
+   - **session** = the real collection (`…_session_<time>`), only after a reviewed gate for the same method, arm and task.
 - **Card 2 — Run** ("Now: …" shows the next step; grey buttons cannot be pressed yet):
-   ① Start teleop → ② spotter name + "arm may move, power ON" → ③ Start recording (**the arm moves** to the start
-   pose) → ▶ Next episode / ↺ Discard + re-record / ⟲ Return to start (arm moves) / ■ End recording (**not an
+   ① Start teleop → ② spotter name (**must differ from the operator**) + "arm may move, power ON": the spotter switches
+   the arm's power on now; if the follower CAN card is red afterwards, run `cd ~/projects/openarm-orboh && sudo bash
+   scripts/canup.sh` → ③ Start recording (**refused while a CAN link is down; the arm moves** to the start pose) → ▶ Next episode / ↺ Discard + re-record / ⟲ Return to start (arm moves) / ■ End recording (**not an
    e-stop**) → ④ Stop teleop. One recording per ①; for another, ④ then ① again.
    - **Live status** (PICO): HOLD / ENGAGED / FAULT / LOCKED, link, input rate, facing, BOUNDARY (wall) and its time,
      start-pose sha; recording episode and its time.
@@ -48,16 +61,27 @@ Start without an operator name, with go/no-go not all PASS, or with another send
 reviewed gate; recording before ②; a wrong start pose; End / Return / Discard while the operator squeezes; Next after
 LOCKED; for the leader arm: End / Return / ④ without "the leader arm is held".
 
+## Did it save?
+When the recorder ends, the status line shows **"saved N of M"** (from the run folder's `manifest.json`); a red banner
+says **"NO EPISODE WAS SAVED"** otherwise. A dry run passes only with all episodes saved; then replay one episode
+(e.g. open the dataset with lerobot's viewer) before a gate.
+
 ## When something goes wrong
 | You see | Do |
 |---|---|
 | red banner "ANOTHER SENDER … E-STOP" | e-stop first, then find the other program |
 | red banner "TELEOP / RECORDER EXITED" | spotter watches the arm; release; End recording; the episode is flagged |
 | LOCKED | release → End recording → ④ → ① again |
+| red banner "RECORDER FAILED: …" (e.g. CAN "Network is down") | the arm did not move; fix the cause (card 0), then **Abort recorder** (appears) → ④ |
+| End recording pressed, recorder still running after 60 s | spotter turns the arm off or supports it (Ctrl-C makes a powered follower go limp) → **Abort recorder**; fallback in a terminal: `pkill -INT -f lerobot-record` |
+| FAULT in live status | the arm **holds** (frozen target); release, wait for "ready", squeeze again |
+| teleop stopped (④ / Ctrl-C of the PICO sender) | the receiver **holds** the last pose; End recording returns the arm to the start pose and it **goes limp** |
 | a connection turns red | stop the episode (End recording), fix it (the card says how), start again from ① |
-| closing the page / Ctrl-C of `gui.sh` | the recorder ends (Esc) and a PICO sender stops; a **leader agent keeps running**: hold the leader arm and stop it in a terminal |
+| closing the page / Ctrl-C of `gui.sh` | the page sends Esc to the recorder (may not end, see above) and stops a PICO sender; a **leader agent keeps running**: the leader operator holds the leader arm, then `pkill -INT -f run_leader_agent` |
 
 ## Where the data goes
-Run folder `~/collections/<UTC>-pilot-<method>/` (console log, manifest), dataset
-`~/.cache/huggingface/lerobot/<repo id>_<time>` (local only, nothing is pushed), notes `runs/gui-…-notes.json`,
-gate reviews `runs/gui-reviews.json`, PICO sender log `runs/gui-…-sender.jsonl`.
+Run folder `~/collections/<UTC>-<method>-<arm>-<stage>/` (console log, command, manifest), e.g.
+`~/collections/20261101T115231Z-pilot-pico/` (older name); dataset `~/.cache/huggingface/lerobot/<repo id>_<date>_<time>`,
+e.g. `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_195903` (dry names repeat with a new time
+stamp, nothing is overwritten; local only, nothing is pushed); notes `runs/gui-…-notes.json`; gate reviews
+`runs/gui-reviews.json` (**git-ignored: keep a copy**); PICO sender log `runs/gui-…-sender.jsonl`.

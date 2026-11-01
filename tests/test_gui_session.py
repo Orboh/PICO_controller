@@ -231,13 +231,15 @@ def test_stage_repo_ids_and_session_needs_a_reviewed_gate(tmp_path):
     assert gs.repo_id(Options(stage="gate", method="leader", side="right")) == "Orboh/openarm_leader_right_gate"
     s = _sess(tmp_path, reviews=tmp_path / "rev.json")
     with pytest.raises(SessionError, match="reviewed gate"):
-        s.start_teleop(Options(stage="session", **OPS))
+        s.start_teleop(Options(stage="session", scene="kitakyushu-takeei-v1", **OPS))
     s.gate_done = {"method": "pico", "side": "left", "tag": "t", "dataset": None, "episodes": 10}
     with pytest.raises(SessionError, match="reviewer's name"):
         s.record_review("")
     s.record_review("Kota")
     assert s.gate_ok("pico", "left")["reviewer"] == "Kota" and s.gate_ok("pico", "right") is None
-    s.start_teleop(Options(stage="session", **OPS))
+    with pytest.raises(SessionError, match="scene profile"):
+        s.start_teleop(Options(stage="session", **OPS))
+    s.start_teleop(Options(stage="session", scene="kitakyushu-takeei-v1", **OPS))
     s.teleop.proc.kill()
 
 
@@ -299,3 +301,75 @@ def test_right_arrow_reaches_lerobots_real_key_reader(monkeypatch):
     assert _wait(lambda: any("READY" in l for l in c.lines), 15)
     c.send(gs.KEYS["next"])
     assert _wait(lambda: any(l == "NEXT True" for l in c.lines), 6)
+
+
+def test_both_arms_leader_uses_collect_bimanual_and_pico_both_is_refused(tmp_path):
+    o = Options(method="leader", side="both", stage="session", tag="s2", episodes=10, **OPS)
+    argv, env = gs.recorder_command(o)
+    assert argv[-4:] == ["collect_bimanual.sh", "session", "s2", "10"][-4:] or argv[1].endswith("collect_bimanual.sh")
+    assert argv[2:] == ["session", "s2", "10"] and env["ENV_FILE"].endswith("kitakyushu_takeei_sort.env")
+    assert env["DISPLAY"] is None and env["OPERATOR"] == "Kento"
+    assert "sleep infinity" in " ".join(gs.teleop_command(o, tmp_path / "x"))
+    assert gs.recorder_command(Options(method="leader", side="both", stage="dry", episodes=2, **OPS))[0][2:] == ["dry", "2"]
+    s = _sess(tmp_path)
+    with pytest.raises(SessionError, match="both arms with the PICO"):
+        s.start_teleop(Options(method="pico", side="both", **OPS))
+    with pytest.raises(SessionError, match="type a tag"):
+        s.start_teleop(Options(method="leader", side="both", stage="dry", **OPS) if False else Options(method="leader", side="both", stage="session", **OPS))
+    downs = gs.links_down("leader", "both")
+    assert all(n.split()[0] in ("can_fol_l", "can_fol_r", "can_lead_l", "can_lead_r") for n in downs)
+    assert gs.RUN_DIR.search("[record-bi] 記録: /home/x/collections/abc").group(1) == "/home/x/collections/abc"
+
+
+
+def test_only_a_complete_gate_is_reviewed_and_a_new_gate_clears_the_ok(tmp_path):
+    """Elephant 11-01 #1: exit 0 and all episodes saved, else no review; a new gate cancels the old OK."""
+    rev = tmp_path / "rev.json"
+    s = _sess(tmp_path, reviews=rev)
+    s.opts = Options(stage="gate", episodes=10, **OPS)
+    s.tag, s.run_dir = "t", str(tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps({"artifacts": {"episodes_recorded": 0, "dataset_root": "/d"}}))
+
+    class Dead:
+        alive = False
+        proc = type("P", (), {"returncode": 0})()
+    s.recorder, s._recorder_was_alive = Dead(), True
+    s.poll()
+    assert s.gate_done is None and "NO EPISODE WAS SAVED" in s.alarm
+    (tmp_path / "manifest.json").write_text(json.dumps({"artifacts": {"episodes_recorded": 10, "dataset_root": "/d"}}))
+    s.alarm, s._recorder_was_alive = "", True
+    s.poll()
+    assert s.gate_done and s.gate_done["episodes"] == 10 and json.loads(rev.read_text())["pending"]
+    s.record_review("Kota")
+    assert s.gate_ok("pico", "left") and "pending" not in json.loads(rev.read_text())
+    s2 = _sess(tmp_path, reviews=rev)
+    s2.start_teleop(Options(stage="gate", scene="kitakyushu-takeei-v1", **OPS))
+    assert s2.gate_ok("pico", "left") is None
+    s2.teleop.proc.kill()
+
+
+def test_stuck_after_60s_and_error_regex_ignores_raise_lines(sess):
+    _ready(sess)
+    sess._recorder_line("    raise ConnectionError(f'Failed to connect')")
+    sess._recorder_line("INFO something Error-free happened")
+    assert not sess.recorder_error
+    sess.end_pressed_at = time.monotonic() - 30
+    assert not sess.recorder_stuck()
+    sess.end_pressed_at = time.monotonic() - 61
+    assert sess.recorder_stuck()
+
+
+def test_every_refusal_has_japanese():
+    import inspect
+    import re as _re
+    from pico_teleop.gui import i18n
+    src = inspect.getsource(gs)
+    msgs = _re.findall(r'SessionError\(f?"([^"{]{8,})', src)
+    prefixes = [p for p, _ in i18n.REFUSALS_JA]
+    missing = [m for m in msgs if not any(m.startswith(p) for p in prefixes)]
+    assert not missing, missing
+
+
+def test_recorder_scripts_drop_display():
+    for name in ("pilot_record.sh", "gate4_record.sh"):
+        assert "env -u DISPLAY -u WAYLAND_DISPLAY" in (gs.REPO / "scripts" / name).read_text()

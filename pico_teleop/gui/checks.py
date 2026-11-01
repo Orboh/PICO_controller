@@ -7,6 +7,7 @@ Setup facts behind the defaults: docs/pico-working-setup.md (log-040).
 from __future__ import annotations
 
 import dataclasses
+import os
 import ipaddress
 import pathlib
 import re
@@ -14,7 +15,7 @@ import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 PICO_NET = ipaddress.ip_network("192.168.0.0/24")      # Wi-Fi `orboh` (PC 192.168.0.136, headset 192.168.0.233 on 11-01)
-HEADSET_IP = "192.168.0.233"
+HEADSET_IP = os.environ.get("PICO_HEADSET_IP", "192.168.0.233")   # DHCP: set PICO_HEADSET_IP when it changes
 SERVICE_PORT = 60061                                   # PICO PC Service (XRoboToolkit RoboticsServiceProcess), local SDK port
 CAMERAS = {"chest": "344422070898", "left": "409122272149", "right": "352122273417"}   # librealsense serials
 LEROBOT_PY = pathlib.Path("~/projects/lerobot/.venv/bin/python").expanduser()
@@ -40,7 +41,8 @@ def wifi() -> Check:
     addrs = re.findall(r"(\d+\.\d+\.\d+\.\d+)/\d+", out)
     on = [a for a in addrs if ipaddress.ip_address(a) in PICO_NET]
     ssid = _run(["iwgetid", "-r"]).strip()
-    return Check("chk.wifi", bool(on), f"{', '.join(on) or 'no 192.168.0.x address'}" + (f" · SSID {ssid}" if ssid else ""), "fix.wifi")
+    ok = bool(on) and ssid in ("orboh", "")      # a known other network is a fail (Elephant 11-01 #3)
+    return Check("chk.wifi", ok, f"{', '.join(on) or 'no 192.168.0.x address'}" + (f" · SSID {ssid}" if ssid else " · SSID unknown"), "fix.wifi")
 
 
 def service() -> Check:
@@ -73,13 +75,13 @@ def can(name: str) -> Check:
 
 
 def cameras(side: str) -> Check:
-    want = {CAMERAS["chest"], CAMERAS[side]}
+    want = {CAMERAS["chest"]} | ({CAMERAS["left"], CAMERAS["right"]} if side == "both" else {CAMERAS[side]})
     out = _run([str(LEROBOT_PY), "-c", "import pyrealsense2 as rs\n"
                 "print(' '.join(d.get_info(rs.camera_info.serial_number) for d in rs.context().query_devices()))"], timeout=8.0)
     seen = set(out.split())
     missing = want - seen
     return Check("chk.cameras", not missing, ("all found" if not missing else "missing " + ", ".join(sorted(missing))) +
-                 f" (chest {CAMERAS['chest']}, {side} wrist {CAMERAS[side]})", "fix.cameras")
+                 f" (chest {CAMERAS['chest']}, wrist {', '.join(CAMERAS[x] for x in (('left', 'right') if side == 'both' else (side,)))})", "fix.cameras")
 
 
 def no_demo() -> Check:
@@ -91,9 +93,10 @@ def no_demo() -> Check:
 def quick(method: str, side: str) -> list[Check]:
     """The checks repeated every few seconds (cheap)."""
     out = []
+    sides = ["l", "r"] if side == "both" else [side[0]]
     if method == "pico":
         out += [wifi(), service(), no_demo(), headset()]
     else:
-        out.append(can(f"can_lead_{side[0]}"))
-    out.append(can(f"can_fol_{side[0]}"))
+        out += [can(f"can_lead_{x}") for x in sides]
+    out += [can(f"can_fol_{x}") for x in sides]
     return out

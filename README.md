@@ -91,28 +91,13 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 
 The sender prints the state of each arm once per second and every event as it happens.
 
-## Collection GUI (log-038, review fixes log-039): leader arm or PICO, one page
+## Collection GUI (log-038 … log-043): leader arm or PICO, one page
 ```bash
-bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC (guide: docs/collection-website.md)
+bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC
 ```
 ![collection GUI](docs/img/collection-gui.png)
-- **Roles**: a **page operator** at the PC presses the buttons; the **spotter** keeps the e-stop and the power switch
-  and confirms step ② by name; the wearer / leader operator teleoperates. Only one browser tab controls (others watch).
-- **1 Setup** (locked while running): method, arm, episodes, seconds, operator name (required, latin letters), task
-  (same text for both methods); PICO: smooth motion (60 Hz + ease in/out, on), wrist rotation, pre-move.
-- **2 Run** — the page shows "Now: …" and greys out what cannot be pressed yet: ① Start teleop → ② spotter name +
-  "arm may move, power ON" → ③ Start recording (the arm moves) → ▶ Next episode / ↺ Discard + re-record /
-  ⟲ Return to start / ■ End recording (**not an e-stop**) → ④ Stop teleop. **One recording per teleop start** (R2).
-- Refused: today's go/no-go not all PASS or item 5 not naming the arm; another sender / leader agent / recorder
-  running; recording before ②; wrong start-pose sha; End / Return / Discard while the operator squeezes (R4); Next
-  after LOCKED; leader method: End / Return / Stop teleop without "the leader arm is held".
-- **Banners**: LOCKED, another sender (E-STOP), teleop or recorder exited during recording (the episode is flagged),
-  the open joint_7 offset for the leader method. Status goes grey ("EXITED") when the sender is gone.
-- **Live status** (PICO): state, link, input rate, facing, boundary (wall) message and time; recording episode + time.
-- **Episodes**: grasp / placed / note + boundary time, saved at once to `runs/gui-<method>-<arm>-<time>-notes.json`
-  (with the settings, spotter, run folder and dataset path from the recorder's manifest); a discarded take's notes go.
-- Closing the GUI ends the recorder (Esc) and stops a PICO sender; a **leader agent is left running** (its arm would go
-  limp): hold the leader arm and stop it in a terminal. The page never switches power.
+Full guide: **`docs/collection-website.md`** (setup, people, cards, stages, both arms, refusals, recovery, data locations);
+PICO connection: `docs/pico-working-setup.md`. Restart the page after every code update.
 
 ## Setup (once per PC)
 

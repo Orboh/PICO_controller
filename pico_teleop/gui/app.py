@@ -35,11 +35,20 @@ class CheckBoard:
         self.sess = sess
         self.target = ("pico", "left")
         self.results: dict[str, checks.Check] = {}
-        self.slow: dict[str, checks.Check] = {}     # input test and cameras: on demand
+        self.slow: dict[str, tuple[float, checks.Check]] = {}   # input test and cameras: on demand, valid 60 s
+        self.testing = False                        # the input test holds the PICO reader lock (① waits)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self) -> None:
         while True:
+            try:
+                self._once()
+            except Exception as e:  # never freeze silently (Elephant 11-01 #3)
+                self.results = {"chk.board": checks.Check("chk.board", False, f"check loop error: {e}", "fix.board")}
+            time.sleep(3.0)
+
+    def _once(self) -> None:
+        if True:
             method, side = (self.sess.opts.method, self.sess.opts.side) if self.sess.running else self.target
             res = {c.key: c for c in checks.quick(method, side)}
             ok, why = self.sess.gng(side)
@@ -53,10 +62,10 @@ class CheckBoard:
                 res["chk.input"] = checks.Check("chk.input", live and s.input_hz >= 30,
                                                 f"{s.input_hz:.0f} Hz (live from the sender)" if live else "no fresh status", "fix.input")
             self.results = res
-            time.sleep(3.0)
 
     def all(self) -> list[checks.Check]:
-        merged = dict(self.slow)
+        now = time.monotonic()
+        merged = {k: c for k, (t0, c) in self.slow.items() if now - t0 < 60.0}
         merged.update(self.results)
         return list(merged.values())
 
@@ -136,13 +145,17 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                         ui.notify(L("checks_hint"), type="warning")
                         return
                     ui.notify("…")
-                    board.slow["chk.input"] = await run.io_bound(checks.pico_input)
+                    board.testing = True
+                    try:
+                        board.slow["chk.input"] = (time.monotonic(), await run.io_bound(checks.pico_input))
+                    finally:
+                        board.testing = False
                     seen["chk"] = None
 
                 async def test_cams():
                     if sess.recorder_running:
                         return
-                    board.slow["chk.cameras"] = await run.io_bound(checks.cameras, o.side)
+                    board.slow["chk.cameras"] = (time.monotonic(), await run.io_bound(checks.cameras, o.side))
                     seen["chk"] = None
                 with ui.row():
                     b_tin = tx(ui.button(on_click=test_input).props("outline"), "test_input")
@@ -161,6 +174,11 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                         o.episodes = STAGE_EPISODES[e.value]
                 st_toggle.on_value_change(on_stage)
                 stage_help = ui.label().classes("text-caption")
+                both_note = ui.label().classes("text-caption text-blue-grey-8")
+                tag_in = tx(ui.input().bind_value(o, "tag").classes("w-48"), "tag", "label")
+                import pathlib as _pl
+                scenes = sorted(p.stem for p in (_pl.Path("~/projects/openarm-orboh/scenes").expanduser()).glob("*.yaml") if not p.stem.startswith("_"))
+                scene_in = tx(ui.select(["none"] + scenes, value="none").bind_value(o, "scene").classes("w-72"), "scene", "label")
                 with ui.row().classes("w-full"):
                     tx(ui.number(value=2, min=1, max=50, precision=0).bind_value(o, "episodes", forward=lambda v: int(v or 1)).classes("w-28"), "episodes", "label")
                     tx(ui.number(value=30, min=5, max=300, precision=0).bind_value(o, "episode_time_s", forward=lambda v: int(v or 30)).classes("w-28"), "seconds", "label")
@@ -328,6 +346,9 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
             board.target = (o.method, o.side)
         if st_toggle.value != o.stage:
             st_toggle.value = o.stage
+        both_note.text = (L("both.pico") if o.method == "pico" else L("both.leader")) if o.side == "both" else ""
+        tag_in.set_visibility(o.side == "both" and o.method == "leader" and o.stage == "session")
+        scene_in.set_visibility(not (o.side == "both" and o.method == "leader") and o.stage != "dry")
         stage_help.text = L(f"stage.{o.stage}") + ("" if o.stage != "session" else
                                                    ("  ✅ gate OK: " + sess.gate_ok(o.method, o.side)["reviewer"]) if sess.gate_ok(o.method, o.side)
                                                    else "  ⛔ no reviewed gate yet")
@@ -344,6 +365,7 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
         leader_note.set_visibility((o.method if not sess.running else sess.opts.method) == "leader")
         banner.text = ("ANOTHER SENDER DRIVES THIS ARM — E-STOP NOW / 別の送信が腕を動かしている — 非常停止" if foreign else
                        sess.alarm or ("LOCKED: release, End recording, ④, start again (R2)" if locked else ""))
+        banner.text = refusal(banner.text, lang["v"]) if banner.text else ""
         banner.set_visibility(bool(banner.text))
         review_card.set_visibility(sess.gate_done is not None)
         if sess.gate_done:
@@ -353,7 +375,7 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                 el.set_enabled(not sess.running and mine())
         running_opts.text = ("running: " + ", ".join(f"{k}={v}" for k, v in vars(sess.opts).items())) if sess.running else ""
         b_tin.set_enabled(not tel)
-        enable(b_teleop, not tel and not rec)
+        enable(b_teleop, not tel and not rec and not board.testing)
         enable(b_power, tel and not sess.power_confirmed and not sess.recorder_used)
         spotter_in.set_enabled(tel and not sess.power_confirmed and mine())
         enable(b_rec, tel and sess.power_confirmed and not rec and not sess.recorder_used and not locked)
@@ -393,8 +415,11 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
             f"start pose sha {sha} ✅" if sha_ok else f"start pose sha {sha or '…'} (expected {EXPECTED_SHA[sess.opts.side]})")
         elapsed = (f" · {time.monotonic() - sess.episode_started:.0f} / {sess.opts.episode_time_s} s"
                    if sess.recording_now and sess.episode_started else "")
+        keys = ("" if not rec else " · keys from this page ✅" if sess.keys_from_page else
+                " · ⚠ keys NOT from this page (desktop keyboard?)" if sess.keys_from_page is False else " · keys: waiting for the recorder")
+        saved = f" · saved {sess.saved_episodes} of {sess.opts.episodes}" if sess.saved_episodes is not None else ""
         st_rec.text = (("RECORDING episode " + str(sess.episode) + elapsed) if sess.recording_now else
-                       ("recorder waiting" if rec else "recorder off")) + (f" · data {sess.dataset}" if sess.dataset else "")
+                       ("recorder waiting" if rec else "recorder off")) + keys + saved + (f" · data {sess.dataset}" if sess.dataset else "")
         if seen["sess"] < sess.n_log:
             n = sess.n_log - seen["sess"]
             for line in list(sess.log)[-n:]:
