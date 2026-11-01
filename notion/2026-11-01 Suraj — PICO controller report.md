@@ -20,7 +20,7 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 | R2 wrist | right | Kento-san / Suraj | roll and pitch | roll left OK; roll right hit joint_2 → **LOCKED**; pitch not reached | log-029 |
 | Wall check 1 | left | — / Suraj | push into the edges | 5 walls, none FAULTed; locked from the wrist-turning side → fixed | log-033 |
 | Wall check 2 | left | — / Suraj | push into the edges for 7 min | **PASS: 63 squeezes, 94 walls, 1 real tracking FAULT, no lock** | log-034 |
-| Wall check right | right | (operator) / Suraj | joint limit, reach forward, re-squeeze, fast wrist turn | **PASS: 25 squeezes, 55 walls, no lock** (only FAULT: link lost because `esc` was pressed while still squeezing) | log-036 |
+| Wall check right | right | Kento-san / Suraj | joint limit, reach forward, re-squeeze, fast wrist turn | **PASS: 25 squeezes, 55 walls, no lock** (only FAULT: link lost because `esc` was pressed while still squeezing) | log-036 |
 
 Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall behaviour). **To do: a written OK in Slack.**
 
