@@ -92,7 +92,10 @@ def repo_id(o: Options) -> str:
 def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], dict[str, str]]:
     """The recorder child: `pilot_record.sh` unchanged (same dataset settings for both methods)."""
     env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip(),
-           "REPO_ID": repo_id(o)}
+           "REPO_ID": repo_id(o),
+           # log-042: with a desktop DISPLAY lerobot reads → ← Esc from the GLOBAL keyboard (pynput), not from its
+           # terminal, so the page's keys were ignored (only `a` arrived). Without a display it reads the terminal.
+           "DISPLAY": None, "WAYLAND_DISPLAY": None}
     return ["bash", str(repo / "scripts" / "pilot_record.sh"), o.method, str(int(o.episodes))], env
 
 
@@ -105,7 +108,10 @@ class PtyChild:
         self.count = 0                       # lines ever read (the deque rolls over; Elephant GUI #8)
         self.on_line = on_line
         master, slave = pty.openpty()
-        full_env = {**os.environ, **(env or {})}
+        full_env = {**os.environ, **{k: v for k, v in (env or {}).items() if v is not None}}
+        for k, v in (env or {}).items():
+            if v is None:
+                full_env.pop(k, None)          # None = remove from the child's environment
         self.proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=str(cwd), env=full_env,
                                      start_new_session=True, close_fds=True)
         os.close(slave)

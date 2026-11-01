@@ -273,3 +273,29 @@ def test_spotter_differs_can_down_and_stuck_recorder(tmp_path):
     s.abort_recorder(confirmed=True)
     assert _wait(lambda: not s.recorder_running)
     s.teleop.proc.kill()
+
+
+def test_recorder_runs_without_a_display(monkeypatch):
+    """log-042: lerobot uses the global keyboard when DISPLAY is set; the page's keys need it removed."""
+    argv, env = gs.recorder_command(Options(**OPS))
+    assert env["DISPLAY"] is None and env["WAYLAND_DISPLAY"] is None
+    monkeypatch.setenv("DISPLAY", ":1")
+    c = PtyChild([sys.executable, "-c", "import os; print('DISPLAY', os.environ.get('DISPLAY'))"], env=env)
+    assert _wait(lambda: any(l.startswith("DISPLAY") for l in c.lines))
+    assert "DISPLAY None" in c.lines
+
+
+def test_right_arrow_reaches_lerobots_real_key_reader(monkeypatch):
+    """log-042: end to end with lerobot's own listener (skipped where lerobot is not installed)."""
+    py = pathlib.Path.home() / "projects" / "lerobot" / ".venv" / "bin" / "python"
+    if not py.exists():
+        pytest.skip("lerobot venv not on this PC")
+    monkeypatch.setenv("DISPLAY", ":1")                      # like the desktop session the GUI runs in
+    code = ("import time\nfrom lerobot.common.control_utils import init_keyboard_listener\n"
+            "l, ev = init_keyboard_listener()\nprint('READY', flush=True)\nt=time.time()\n"
+            "while time.time()-t<3 and not ev['exit_early']: time.sleep(0.05)\nprint('NEXT', ev['exit_early'], flush=True)\n")
+    _, env = gs.recorder_command(Options(**OPS))
+    c = PtyChild([str(py), "-c", code], env={"DISPLAY": env["DISPLAY"], "WAYLAND_DISPLAY": env["WAYLAND_DISPLAY"]})
+    assert _wait(lambda: any("READY" in l for l in c.lines), 15)
+    c.send(gs.KEYS["next"])
+    assert _wait(lambda: any(l == "NEXT True" for l in c.lines), 6)
