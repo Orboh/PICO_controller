@@ -8,7 +8,10 @@ States (operator meaning in README "Controls")
 - ENGAGED : clutch held. TCP target = anchor TCP + scale * (hand - anchor hand), in the robot frame.
 - FAULT   : something went wrong while engaged. Targets frozen until the clutch is RELEASED (on a
             valid sample), then HOLD; a new squeeze re-anchors. Causes: invalid / stale / frozen input,
-            invalid grip or trigger value, IK unreachable, near singular, IK jump, posture change.
+            invalid grip or trigger value, hand / rotation tracking jumps, hand too far ahead, a move
+            deeper below the hard stretched-arm floor.
+- WALL (log-030/033, not a state): at the workspace edge (joint limit, stretched arm, drift, posture,
+            out of reach, IK jump, rotation lag / gap) the target holds and the hand slips; ENGAGED stays.
 "Armed": a clutch already held when the sender starts does not engage; a release must be seen on a
 VALID sample first (an all-zero SDK frame reads grip 0 and must not count as a release).
 Engaging needs the clutch held for `engage_hold_s` (0.3 s) on valid samples.
@@ -179,7 +182,8 @@ class ArmTeleop:
         self.R_target: np.ndarray | None = None       # rate-limited gripper orientation target
         self.dt = 1.0 / self.cfg.hz
         # WALL (log-030): at the workspace edge the target holds and the anchors slip (no FAULT, no lock)
-        self.wall: str | None = None       # current wall contact (None = free)
+        self.wall: str | None = None       # current wall contact (None = free; message hysteresis)
+        self.blocked_now: str | None = None  # wall reason in THIS cycle only (logged per cycle for episode filtering)
         self.wall_last_t = -1e9            # session time of the last blocked cycle
         self.n_wall_cycles = 0             # evidence: blocked cycles this session
         self.slip_m = 0.0                  # evidence: total hand slip (m) and rotation slip (deg)
@@ -253,11 +257,11 @@ class ArmTeleop:
         self.n_wall_cycles += 1
         self.wall_last_t = self.n_steps * self.dt
         first = self.wall is None
-        self.wall = why
+        self.wall = self.blocked_now = why
         return f"WALL: {why}: {hint} (not a FAULT)" if first else None
 
     def _fault(self, why: str) -> StepOut:
-        self.state = FAULT
+        self.state, self.wall = FAULT, None
         self.q_ik = self.q.copy()
         self.qd = np.zeros_like(self.q)
         # kind of FAULT: message head with numbers and joint indices removed ("IK jumped 5.6 deg" and
@@ -317,6 +321,7 @@ class ArmTeleop:
     def step(self, h: HandInput) -> StepOut:
         cfg = self.cfg
         self.n_steps += 1
+        self.blocked_now = None
         if self.state != ENGAGED:
             self.qd = np.zeros_like(self.q)   # acceleration limit only while following (HOLD/FAULT stop at once)
         released = h.valid and h.clutch < cfg.clutch_off   # only a VALID sample can count as a release
@@ -331,7 +336,7 @@ class ArmTeleop:
         if self.state == ENGAGED and not h.valid:
             return self._fault(h.why_invalid or "input invalid")
         if self.state == ENGAGED and released:
-            self.state = HOLD
+            self.state, self.wall = HOLD, None
             return self._out("released: HOLD at the last sent target")
 
         if self.state == HOLD:
@@ -371,7 +376,7 @@ class ArmTeleop:
             self.anchor_q = self.q.copy()
             self.p_target = self.anchor_tcp.copy()
             self.q_ik = self.q.copy()
-            self.state, self.grip_synced = ENGAGED, False
+            self.state, self.grip_synced, self.wall = ENGAGED, False, None
             self.rot_gap_since, self.last_gap = None, 0.0
             return self._out("ENGAGED: anchored at the current target (no jump)")
 
@@ -460,7 +465,8 @@ class ArmTeleop:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
             blocked = rot_block or self._edge(res)   # going deeper into a stretched pose is a WALL first (log-030c)
-            if blocked is None and res.sigma_min < cfg.min_sigma_hard:
+            if (blocked is None and res.sigma_min < cfg.min_sigma_hard
+                    and res.sigma_min < self.kin.sigma_min(self.q_ik) - 1e-9):   # Elephant 11-01 #1: moving out is allowed
                 # hard floor (Goldfish): an ACCEPTED answer may never be this stretched
                 return self._fault(f"near singular (sigma {res.sigma_min:.3f} < {cfg.min_sigma_hard})")
             if blocked is None:

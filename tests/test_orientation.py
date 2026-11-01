@@ -261,7 +261,7 @@ def test_orientation_follows_position_when_rotation_unreachable():
     assert moved > 0.005 or (out.state == FAULT and "rotation" in out.event)
 
 
-def test_rotation_gap_at_wrist_limit_faults_with_a_rotation_message():
+def test_rotation_gap_at_wrist_limit_is_a_wall_or_rotation_fault():
     """Elephant m10 #7: at a wrist limit the gripper can lag the HAND; FAULT after 0.5 s, not drift."""
     arm = _arm("right", max_session_drift_deg=180.0, limit_guard_deg=0.0)
     out = None

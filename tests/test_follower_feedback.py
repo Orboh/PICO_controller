@@ -216,3 +216,14 @@ def test_premove_refused_while_engaged():
     ch = _ch(0.0)
     ch.arm.state = ENGAGED   # only the gate is tested here
     assert "refused" in ch.premove_forward(0.10, time.monotonic())
+
+
+def test_premove_cancelled_by_a_squeeze():
+    """Elephant 11-01 #3: a squeeze cancels the pre-move (log-028 promise)."""
+    link = StubLink()
+    ch = ArmChannel("left", load_start_pose("left"), TeleopConfig(engage_hold_s=0.0), link, DEFAULT_URDF, 1.0,
+                    DEFAULT_TCP_OFFSET_M)
+    assert ch.premove_forward(0.10, time.monotonic()).startswith("pre-move: moving")
+    _tick(ch, 0.0, 1)
+    _, ev = _tick(ch, 1.0, 2)
+    assert ch.move is None and "cancelled" in (ev or "")

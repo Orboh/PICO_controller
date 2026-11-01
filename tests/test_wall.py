@@ -113,3 +113,39 @@ def test_acceleration_limit_eases_in_without_overshoot_and_stops_on_release():
     q_rel = arm.q.copy()
     arm.step(ADAPT(_c(grip=0.0), True))
     assert np.allclose(arm.q, q_rel) and not np.any(arm.qd)   # HOLD: no drift after release
+
+
+def test_hard_floor_lets_a_deep_arm_move_out():
+    """Elephant 11-01 #1: engaged below the hard floor, a move that RAISES sigma is accepted (no trap)."""
+    seen_out = False
+    for d in [(0.0005, 0, 0), (-0.0005, 0, 0), (0, 0.0005, 0), (0, -0.0005, 0), (0, 0, 0.0005), (0, 0, -0.0005)]:
+        arm = _arm(orientation=False, min_sigma=0.6, min_sigma_hard=0.5)
+        s0 = arm.kin.sigma_min(arm.q_ik)
+        out = arm.step(ADAPT(_c(delta=d), True))
+        s1 = arm.kin.sigma_min(arm.q_ik)
+        if out.state == FAULT:
+            assert "singular" in out.event          # only a move that would go deeper may FAULT
+        elif s1 > s0 + 1e-9:
+            seen_out = True
+    assert seen_out
+
+
+def test_wall_flag_is_per_cycle_and_cleared_on_release():
+    """Elephant 11-01 #2: `blocked_now` marks only held cycles; `wall` is cleared on release."""
+    arm = _arm("left")
+    held = 0
+    for i in range(1, 500):
+        arm.step(ADAPT(_c((0, 1, 0), -min(0.1 * i, 40.0)), True))
+        held += arm.blocked_now is not None
+    assert held == arm.n_wall_cycles
+    arm.step(ADAPT(_c(grip=0.0), True))
+    assert arm.state == HOLD and arm.wall is None and arm.blocked_now is None
+
+
+def test_acc_limit_keeps_joints_out_of_the_hard_margin():
+    """Elephant 11-01 #6: with the acceleration limit the eased joints may end slightly inside the 3 deg guard,
+    but never closer than 2.5 deg (the guard is checked on the IK answer, not on the eased joints)."""
+    arm = _arm("left", hz=60.0, max_joint_acc_dps2=300.0)
+    for i in range(1, 700):
+        arm.step(ADAPT(_c((0, 1, 0), -min(0.1 * i, 40.0)), True))
+        assert _room(arm).min() >= 2.5

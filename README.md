@@ -18,9 +18,9 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 3 fake receiver | done offline, and **online PASS** with live PICO → real port 5701 → real receiver (no robot, log-009) | — |
 | 4 recording dry run | **PASS** 2026-10-31: lerobot-record with the PICO, chest + left wrist, follower tracks the actions (log-020) | a leader-arm recording with the same command for the side-by-side schema check |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
-| 2b wrist rotation | offline + dry run PASS (log-015/016); **real arm: small single-axis turns ≤ 15° followed 1:1, 0 FAULTs** (session 5, log-019; spotter-rule deviation) | repeat with a separate spotter; larger turns; right arm |
-| pilot (leader vs PICO) | leader × 5 recorded (log-021); PICO locked twice after 1 good episode (log-022/023); joint_1 drift limit 120° (log-024) **offline only** | 5 PICO episodes on the robot without LOCKED (runbook "Pilot recording"); compare |
-| 5 hardware | **PASS** 2026-10-31, left arm: directions (session 2) and gripper by trigger (session 3), operator Kota-san, spotter Suraj (log-010/011/014) | right arm; wrist rotation; gripper force feedback; follower-feedback patch (Kento) |
+| 2b wrist rotation | offline + dry run PASS (log-015/016); real arm: left roll/pitch/yaw 1:1 (log-019, log-027), right roll left (log-029); with walls no lock (log-034) | right-arm wrist with the wall version; pitch right arm |
+| pilot (leader vs PICO) | leader × 5 (log-021); PICO 11-01: 2 good episodes with joint_1 120° (log-025), then locked → wall fix (log-030/033), **wall check PASS on the left arm** (log-034) | PICO block × 5 with the wall; episode wall/slip rule; joint_7 leader offset (Kento) |
+| 5 hardware | **PASS** 10-31 left arm (log-010/011/014); 11-01 **right arm first session** position PASS (log-029, Kento-san / Suraj); wall check left (log-034) | wall check on the right arm; gripper force feedback; follower-feedback patch (Kento) |
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
@@ -28,13 +28,14 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 1. [x] Offline: finish the replays old vs new (today's locked runs + session 4 + pilot redo): no edge locks, no creep
 2. [x] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
 3. [x] log-030 + commit (deferred: limit avoidance in wrist mode; not possible: headset wall signal / vibration)
-4. [ ] Short Elephant + Goldfish review of the finished wall code
-5. [x] Arm (supervised, one arm): wall check PASS on the left arm (log-034: 94 walls, no lock) (joint limit, stretched arm, 60° posture): arm holds, `WALL`, back works, no FAULT/LOCK
+4. [x] Elephant + Goldfish review of the day (log-035): code fixes applied; **process gap: steps 5 ran minutes after the commit, before this review**
+5. [x] Arm: wall check PASS on the left arm (log-034: 94 walls, no lock): joint-limit, drift and rotation walls seen; **stretched-arm / out-of-reach / joint-jump walls not yet seen on the robot**
 6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
 7. [ ] PICO block × 5 (left) with the wall; wall time per episode from the log
 8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
 Side task: PICO video (FPV) with an on/off button on the controller (log-031): built, not used (Wi-Fi load).
-Jerk (log-032): try `HZ=60 ACC=300` on the arm together with step 5 (offline: jerk −44..66 %).
+Jerk (log-032): `HZ=60 ACC=300` not yet on the arm (the wall checks ran with it off): needs its own supervised check before recording with it.
+Before PICO data collection (log-035): written approval (120° j1, right arm, wall behaviour), right-arm wall check, 60 Hz check, episode rule for wall time / slip, Kento's joint_7 offset.
 
 ## To do after the PICO data collection
 - [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set
@@ -57,8 +58,8 @@ more than 75° away from the robot's forward. Once engaged you may turn your hea
 | **Grip, open fully (< 0.4)** | HOLD: no new targets are sent; the arm finishes the last small step (≤ 0.9° per joint, one 20 ms cycle) and stays there. Settling on the real arm: to be measured in the first 2 cm test. Your hand can move freely. | ENGAGED |
 | Grip half-squeezed (0.4 to 0.6) | nothing changes (keeps the current state) | always |
 | **Trigger** | gripper: released = open (-58°, 2° short of the measured stop at -60.1°), fully pulled = closed (0°). **Gentle sync:** after each engage the gripper moves **slowly (30°/s)** toward where the trigger says until they match, then follows at normal speed. Example: at start the gripper is closed and the trigger released, so after engaging it opens slowly over ~2 s; release the grip to stop it. | ENGAGED only; in HOLD and FAULT the gripper keeps its angle |
-| **Wrist rotation** (only with `--orientation`) | turning your hand turns the gripper about the same axis by the **same angle (1:1; position stays half scale)**. Relative: the controller's tilt at the moment you squeeze counts as zero; turning 20° from there turns the gripper 20°; release and squeeze again re-zeroes it. The gripper turns at most 90°/s, so after a fast hand turn it **keeps turning briefly** (a 45° snap ≈ 0.5 s) until it catches up. Wrist turns count toward the 60° posture limit. | ENGAGED only; **off by default; not yet used on the arm** |
-| A/B/X/Y, menu, sticks | nothing in the sender. **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** | — |
+| **Wrist rotation** (only with `--orientation`) | turning your hand turns the gripper about the same axis by the **same angle (1:1; position stays half scale)**. Relative: the controller's tilt at the moment you squeeze counts as zero; turning 20° from there turns the gripper 20°; release and squeeze again re-zeroes it. The gripper turns at most 90°/s, so after a fast hand turn it **keeps turning briefly** (a 45° snap ≈ 0.5 s) until it catches up. Wrist turns count toward the 60° posture limit. | ENGAGED only; **off by default; used on the arm 10-31 and 11-01 (log-019/027/029/034)** |
+| A/B/X/Y, menu, sticks | **left Y held 1 s = PICO video on/off** only when started with `--video-device` and never while engaged (log-031). **A toggles sending in the PICO app: pressing it stops all input (the arm FAULTs).** B: the app's video 2D/3D view. | — |
 | **Ctrl-C** on the sender PC | stop sending. The receiver holds the last pose after 250 ms (the arm stays powered). Before starting the sender again: restart the follower (runbook R2). | always |
 
 **There is no stop button on the controllers.** To stop the arm moving: open the grip. To stop
@@ -78,12 +79,10 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 | `input stale` (> 0.4 s without new PICO data) / `pose zero` / `pose frozen` / `grip/trigger out of range` | tracking or the headset stream was lost | check the headset is on and the controller is in view; release, squeeze |
 | `operator faces … deg from the robot's forward … when starting` | at the moment you squeezed, the headset looked more than 75° away from the robot's forward (e.g. your body is turned toward the PC) | turn your body to face the robot's forward (recenter if needed), then squeeze; once engaged you may look at the arm |
 | `WALL: … the arm stops here, move back (not a FAULT)` | **log-030:** the move would go deeper into the workspace edge: a joint within 3° of its limit, the arm stretched (sigma < 0.03), a joint past its session drift limit (120° joint_1 / 90°), a joint > 60° from where you squeezed, or a target out of reach. The arm **holds** there, stays ENGAGED and your hand **slips** (pushing further does nothing); moving back follows at once. No FAULT, does not count toward LOCKED. Logged per cycle (`wall` in the JSONL) and summed at exit. | move back; or release and squeeze again |
-| `near singular (sigma … < 0.02)` | the arm is almost fully straight (hard floor; between 0.02 and 0.03 it is a WALL) | release, bring the hand back toward you, squeeze |
-| `IK jumped … deg in one cycle` | the solver tried to flip the arm's posture | same as above |
+| `WALL: hand turned faster than the gripper …` / `WALL: joints would jump …` / `WALL: wrist cannot keep your hand's rotation here` | **log-030b/033:** the extra hand turn beyond 40° ahead is dropped (the gripper keeps turning ≤ 90°/s for a moment); a big joint jump is never sent; a move that would tilt the gripper away from your hand is held | turn slower / move back |
+| `near singular (sigma … < 0.02)` | the arm is almost fully straight and the move would make it straighter (hard floor; above 0.02 it is a WALL; moving out is always allowed) | bring the hand back toward you |
 | `hand jumped at … m/s` | the controller position jumped (tracking lost and caught up) | keep the controller in view; release, squeeze |
-| `wrist cannot reach that rotation (… deg off)` | even the best reachable rotation is more than 20° from what your hand asks (smaller gaps: the gripper just follows your position with the closest rotation it can) | release → turn the hand back → "ready" → squeeze |
 | `hand rotation jumped … deg in one update` or `… at … deg/s` | the controller's rotation changed > 30° in one PICO update or faster than 720°/s: only a tracking catch-up does that | keep the controller in view; release → "ready" → squeeze |
-| `hand turned … deg ahead of the gripper` | you turned faster than the gripper may follow (90°/s) and it fell 40° behind | release → turn back → "ready" → squeeze; turn slower |
 | `hand is … cm ahead of the arm target` | your hand moved faster than the arm may follow; the 15 cm is measured at the gripper tip (hand × 0.5) | release, move slower, squeeze |
 | `LINK DOWN` | no echo from the arm PC for 1 s (it may be saving an episode). The arm holds; the sender keeps sending the held pose **for 5 s, then stops and exits** (`SENDING STOPPED`) | if `link back` comes within 5 s: release and squeeze on "ready". After `SENDING STOPPED`: restart **both** follower and sender (runbook R2) |
 | `echo of packets we did not send` | another sender (e.g. leader_agent) uses the same arm port | spotter: **emergency stop first** (the other sender may still drive the arm), then find and stop the other sender |

@@ -1,11 +1,13 @@
 # Gate 5 — supervised real-arm sessions with the PICO (runbook + spotter card)
 
-Status: approved supervised left-arm tests on 2026-10-31: session 2 (directions) and session 3 (gripper
-by trigger), operator Kota-san, spotter Suraj (log-010/011/014). **Covered**: left arm, position control,
-gripper by trigger, TCP offset 0.1025 (assumed), follower checkout `openarm-orboh` `feat/takeei-wood-l1`
-@ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19. **Not covered**: right arm, both arms,
-**wrist rotation (`--orientation`): do not use on the arm before go/no-go item 10**, recording, a
-measured TCP, the default branches.
+Status (2026-11-01): supervised sessions, approvals in person by Kota-san (written Slack OK still to get).
+**Covered**: left arm position, gripper by trigger, wrist rotation (log-019/027), recording (log-020), joint_1 drift
+120° (log-025), the WALL behaviour on the left arm (log-034); right arm position (log-029). Follower checkout
+`openarm-orboh` `feat/takeei-wood-l1` @ e98e987, lerobot `feat/bi-openarm-soft-move-to` @ a720ec19.
+**Not covered**: walls on the right arm; stretched-arm / out-of-reach / joint-jump walls seen on the robot; the
+pre-move (Enter); `HZ=60 ACC=300`; the PICO video; both arms; a measured TCP; the default branches.
+**Rule from the 11-01 review (log-035)**: after a code change, run the offline replays (`tools/fastreplay.py`) and the
+test suite, and re-check go/no-go item 10 for rotation changes, **before** the next robot session.
 Source rules: `notion/OpenArm 安全プロトコル…md` (archived copy), Kento's request §8-9.
 If anything surprises anyone: **stop** (spotter card below).
 
@@ -71,7 +73,7 @@ If anything surprises anyone: **stop** (spotter card below).
 ## Spotter card
 | You see | Do first | Then |
 |---|---|---|
-| arm moves when the grip is open, or jumps (exceptions: the follower's startup move; the `esc` return move (R4); the record 'a' key; all three announced) | **emergency stop** (or PSU off) | support the arm or keep clear: with power off it **drops** |
+| arm moves when the grip is open, or jumps (exceptions: the follower's startup move; the `esc` return move (R4); the record 'a' key; the **pre-move** after Enter (10°/s, log-028); all announced) | **emergency stop** (or PSU off) | support the arm or keep clear: with power off it **drops** |
 | `FAULT` in the terminal | call "FAULT" (the arm is frozen, safe) | wearer releases, hand back; you say "ready" before the next squeeze (R1). Same FAULT twice → stop |
 | noise, shaking, sudden speed | call "release" | if it does not stop: emergency stop |
 | `LINK DOWN` / `SENDING STOPPED` | nothing moves (the receiver holds) | R2: restart both; never restart only one |
@@ -80,7 +82,7 @@ If anything surprises anyone: **stop** (spotter card below).
 | wearer squeezes before "ready" | call "release" | repeat R1 |
 | (with `--orientation`) the wrist turns while the hand's position is still | expected only if the wearer turned the hand (it may finish turning ~0.5 s later, 90°/s limit); otherwise call "release" | — |
 | (with `--orientation`) fingers or the flange swing toward the table or the arm | call "release" | if it does not stop: emergency stop |
-| `WALL: …` (log-030) | the arm stops at the workspace edge and **holds** (not a FAULT; it may still finish up to 10° of joint motion toward its last target). joint_1 may swing up to **120°** from the start: keep the area to the robot's left/front clear | nothing; the wearer moves back. A wall that holds for long, or the wearer keeps pushing: call "move back" |
+| `WALL: …` (log-030) | the arm stops at the workspace edge and **holds** (not a FAULT; it may still finish up to 10° of joint motion toward its last target). joint_1 may swing up to **120°** from the start: keep the area to the robot's left/front clear | nothing; the wearer moves back. **The wearer cannot see the message in the headset: the spotter calls "wall, move back"** when the arm stops and the wearer keeps pushing (> 2 s). Wall time and slip are in the run log |
 | `LOCKED` in the terminal | the sender refuses to engage until restarted (same FAULT twice in 30 s) | stop: release, `esc`, restart both (R2); log why it repeated |
 | anything unexpected | stop the session | log it before resuming |
 
@@ -115,7 +117,8 @@ Before: no leader_agent running (`pgrep -af leader_agent` empty), go/no-go incl.
   squeeze: turn → hold 2 s → turn back → release. Before each pitch: fingers ≥ 10 cm above the table; pitch last.
   **No 20° turns**: offline, 20° FAULTs on left pitch down, left yaw left, right pitch down, right yaw right
   (joint_2 / joint_7 within 3° of a limit; with `--orientation` the limit avoidance is not active).
-- Expected at the edge: `WALL: …` (log-030; arm holds, not a FAULT: move back). Expected FAULTs (arm freezes,
-  safe): `hand turned … ahead of the gripper` (turn slower), `wrist cannot reach that rotation`. Release; "ready".
+- Expected at the edge: `WALL: …` (log-030/033; arm holds, not a FAULT: move back). After `WALL: hand turned faster
+  than the gripper` the gripper keeps turning ≤ 90°/s for a moment (it catches up to 40° behind the hand). Real FAULTs
+  (tracking jumps): release; "ready".
 - **Stop rules:** the same FAULT twice or `LOCKED` → stop the session; wrong direction → release, stop, log.
 - PASS is judged by the spotter's eye (no follower feedback); the log gives the commanded values only.

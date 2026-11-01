@@ -250,8 +250,11 @@ class ArmChannel:
                 " | LINK DOWN: holding; if the follower was restarted, restart this sender too (runbook R2)"
         elif ls == "ok" and self.link_down:
             self.link_down, event = False, "link back: release the grip, then squeeze to continue"
-        if self.move is not None and (self.arm.state != HOLD or now > self.move_deadline):
-            self.move, self.move_dps, event = None, None, "soft_move_to / pre-move cancelled (left HOLD or expired)"
+        squeezed = ctrl is not None and float(ctrl.grip) >= self.arm.cfg.clutch_on
+        if self.move is not None and (self.arm.state != HOLD or now > self.move_deadline
+                                      or (self.move_dps and (squeezed or ls not in ("ok", "dry")))):
+            # Elephant 11-01 #3: a squeeze or a lost link cancels the pre-move (log-028 promise)
+            self.move, self.move_dps, event = None, None, "soft_move_to / pre-move cancelled (squeeze, link, left HOLD or expired)"
         if self.move is not None:
             if self.arm.move_toward(self.move, max_dps=self.move_dps or self.arm.cfg.max_joint_speed_dps):
                 event = "pre-move: arrived" if self.move_dps else "soft_move_to: arrived at the requested pose"
@@ -379,6 +382,9 @@ def main(argv=None) -> int:
           f"orientation={'ON' if a.orientation else 'off'} "
           f"dry_run={a.dry_run} log={log_path}\n[sender] squeeze GRIP to follow, release to hold; "
           f"TRIGGER closes the gripper. Ctrl-C stops (receiver holds the last pose).", flush=True)
+    if a.premove_forward_cm > 0 and a.arms == "both":
+        print("[sender] REFUSED: --premove-forward-cm is for one arm only (--arms left or right)", file=sys.stderr)
+        return 2
     if not 0.0 <= a.premove_forward_cm <= 15.0:
         print("[sender] REFUSED: --premove-forward-cm must be 0..15", file=sys.stderr)
         return 2
@@ -406,7 +412,8 @@ def main(argv=None) -> int:
             tr.update(fr)
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
             if video is not None:
-                vev = video.update(bool(fr.controller("left").secondary), t0)
+                engaged = any(ch.arm.state == ENGAGED for ch in chans)   # Elephant 11-01 #4: never while following
+                vev = video.update(bool(fr.controller("left").secondary) and not engaged, t0)
                 if vev:
                     print(f"[video] {vev}", flush=True)
                 rec["video"] = video.on
@@ -421,7 +428,7 @@ def main(argv=None) -> int:
                 rec["arms"][ch.side] = {"state": "STOPPED" if ch.stopped else ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
                                         "follower": ch.link.follower if ch.link else None,
-                                        "wall": ch.arm.wall}  # log-030: filter episodes recorded at a wall
+                                        "wall": ch.arm.blocked_now}  # held at a wall THIS cycle (episode filter)
                 if ev:
                     print(f"[{ch.side}] {ev}", flush=True)
             log.write(json.dumps(rec) + "\n")
@@ -456,7 +463,7 @@ def main(argv=None) -> int:
         print("[sender] Ctrl-C: stopping; the receiver will hold the last pose", flush=True)
     finally:
         if video is not None and video.on:
-            print(f"[video] {video.stop()}", flush=True)
+            print(f"[video] {video.stop(wait=True)}", flush=True)
         src.close()
         log.close()
         for ch in chans:

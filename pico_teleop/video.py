@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 from typing import Callable
 
 DEFAULT_BIN = os.path.expanduser("~/projects/XRoboToolkit-Orin-Video-Sender/OrinVideoSender")
@@ -30,8 +31,10 @@ class VideoToggle:
         self.fired = False                   # one toggle per press, however long it is held
 
     def _spawn(self, cmd: list[str]) -> subprocess.Popen:
-        out = open(self.log_path, "ab") if self.log_path else subprocess.DEVNULL
-        return subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        if not self.log_path:
+            return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        with open(self.log_path, "ab") as out:   # the child keeps its own copy of the handle
+            return subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 
     @property
     def on(self) -> bool:
@@ -61,13 +64,20 @@ class VideoToggle:
         return (f"VIDEO ON ({shlex.join(self.cmd)}): in the headset, Remote Vision -> ZEDMINI -> Listen -> "
                 "this PC's IP, port 13579. Hold Y 1 s to stop")
 
-    def stop(self) -> str:
-        if self.proc is not None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=3.0)
-        self.proc = None
+    def stop(self, wait: bool = False) -> str:
+        """Non-blocking (the 50 Hz loop must not stall, Elephant 11-01 #4): terminate, reap in a thread."""
+        p, self.proc = self.proc, None
+        if p is not None:
+            p.terminate()
+
+            def _reap() -> None:
+                try:
+                    p.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=3.0)
+            if wait:
+                _reap()
+            else:
+                threading.Thread(target=_reap, daemon=True).start()
         return "VIDEO OFF (hold Y 1 s to start again)"
