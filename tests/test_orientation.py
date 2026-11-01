@@ -159,14 +159,17 @@ def test_rotation_speed_fault_on_device_clock():
     assert out.state == FAULT and "deg/s" in out.event
 
 
-def test_rotation_lag_fault():
+def test_rotation_lag_slips_instead_of_fault():
+    """log-033: a hand turning faster than the gripper (90 deg/s) no longer FAULTs; the extra turn is dropped."""
     arm = _arm()
-    out = None
-    for i in range(1, 40):  # 28 deg per update would trip the step check; 25 deg per update, no t
+    events = []
+    for i in range(1, 40):  # 25 deg per update (no tracking-jump FAULT), far beyond 90 deg/s
         out = arm.step(ADAPT(_c((0, 0, 1), min(25.0 * i, 100.0)), True))
-        if out.state == FAULT:
-            break
-    assert out.state == FAULT and "ahead of the gripper" in out.event
+        events.append(out.event or "")
+        assert out.state == ENGAGED, out.event
+    assert any("faster than the gripper" in e for e in events) and arm.slip_deg > 0 and not arm.locked
+    w = _tcp_rot_deg(arm)
+    assert np.linalg.norm(w) <= 41.0 + 1e-6        # the gripper turned at most the lag limit, not 100 deg
 
 
 def test_reengage_while_rotated_has_no_jump():
@@ -277,12 +280,15 @@ def test_orientation_fallback_runs_and_gap_stays_bounded(side):
     """Reaching far while the hand's rotation is held: position-only fallback kicks in, the gripper's
     rotation gap to the hand stays bounded and ends in a rotation-specific FAULT (log-018)."""
     arm = _arm(side, max_session_drift_deg=180.0, limit_guard_deg=0.0, max_posture_change_deg=180.0)
-    out = None
+    out, events = None, []
     for i in range(1, 600):
         out = arm.step(ADAPT(_c((0, 0, 1), 0.0, delta=(0.0015 * i, 0.0, -0.001 * i)), True))
+        events.append(out.event or "")
         if out.state == FAULT:
             break
     gap = np.degrees(np.linalg.norm(pin.log3(arm.kin.fk(arm.q).rotation @ arm.anchor_tcp_rot.T)))
     assert arm.n_rot_fallback > 10
-    assert out.state == FAULT and "wrist cannot reach that rotation" in out.event
+    # log-033: the rotation edge is a WALL now (dropped turn), not a FAULT; never a lock
+    assert any("wrist cannot keep" in e for e in events) or arm.n_wall_cycles > 0
+    assert not arm.locked
     assert gap < 40.0

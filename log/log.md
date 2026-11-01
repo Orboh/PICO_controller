@@ -40,3 +40,4 @@ Rules for this folder:
 | [log-030.md](log-030.md) | WALL instead of FAULT at the workspace edge (limit, stretched arm, drift, posture, out of reach): target holds, hand slips, no lock; hard singular floor; reviewed first; 114 tests; replays: locked wrist runs → 0 FAULTs, session 4 no creep. |
 | [log-031.md](log-031.md) | PICO video (FPV) pipeline: OrinVideoSender built, hold LEFT Y 1 s = on/off inside the sender; kept but not used (Wi-Fi load). |
 | [log-032.md](log-032.md) | PICO jerk: mainly the 50 Hz sender vs 30 fps recorder mismatch (+ hard speed cut, input gaps); offline bench: 60 Hz + acc 300°/s² cuts jerk 44-66 % within ~1°; opt-in `HZ=60 ACC=300`; not yet on the arm. |
+| [log-033.md](log-033.md) | Wall check on the left arm: 5 walls, none FAULTed; lock came from the rotation-lag FAULT at the wrist limit → rotation edge is a wall too (slip fast turns; hold moves that tilt the gripper away from the hand); replays 0 locks; 116 tests. |

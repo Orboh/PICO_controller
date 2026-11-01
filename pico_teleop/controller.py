@@ -184,6 +184,7 @@ class ArmTeleop:
         self.n_wall_cycles = 0             # evidence: blocked cycles this session
         self.slip_m = 0.0                  # evidence: total hand slip (m) and rotation slip (deg)
         self.slip_deg = 0.0
+        self.last_gap = 0.0                # gripper-to-hand rotation gap of the last accepted cycle (deg)
 
     # ------------------------------------------------------------------------------------
     def action(self) -> dict[str, float]:
@@ -245,11 +246,15 @@ class ArmTeleop:
             new_rot = self.anchor_tcp_rot @ self.R_target.T @ h.rot
             self.slip_deg += math.degrees(float(np.linalg.norm(pin.log3(new_rot @ self.anchor_hand_rot.T))))
             self.anchor_hand_rot = new_rot
+        return self._note_wall(why, "the arm stops here, move back")
+
+    def _note_wall(self, why: str, hint: str = "turn slower") -> str | None:
+        """Wall bookkeeping: count, time, one message per contact (no FAULT, no lockout)."""
         self.n_wall_cycles += 1
         self.wall_last_t = self.n_steps * self.dt
         first = self.wall is None
         self.wall = why
-        return f"WALL: {why}: the arm stops here, move back (not a FAULT)" if first else None
+        return f"WALL: {why}: {hint} (not a FAULT)" if first else None
 
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
@@ -367,7 +372,7 @@ class ArmTeleop:
             self.p_target = self.anchor_tcp.copy()
             self.q_ik = self.q.copy()
             self.state, self.grip_synced = ENGAGED, False
-            self.rot_gap_since = None
+            self.rot_gap_since, self.last_gap = None, 0.0
             return self._out("ENGAGED: anchored at the current target (no jump)")
 
         # ENGAGED and valid: input sanity (a hidden controller "catches up" in one jump, log-008)
@@ -400,7 +405,7 @@ class ArmTeleop:
             return self._fault(f"hand is {lag_m * 100:.0f} cm ahead of the arm target "
                                f"(> {cfg.max_target_lag_m * 100:.0f}): move slower")
         # follow
-        err, sigma, event = 0.0, math.nan, None
+        err, sigma, event, rot_block, gap_now = 0.0, math.nan, None, None, None
         lag = float(np.max(np.abs(np.rad2deg(self.q_ik - self.q))))
         if lag <= cfg.max_lag_deg:  # otherwise the target waits while the joints catch up
             p_des = self.anchor_tcp + cfg.scale * (h.pos - self.anchor_hand)
@@ -415,8 +420,15 @@ class ArmTeleop:
                 w = pin.log3(R_des @ self.R_target.T)
                 ang, lim_r = float(np.linalg.norm(w)), math.radians(cfg.max_rot_speed_dps) * self.dt
                 if math.degrees(ang) > cfg.max_rot_lag_deg:  # also keeps log3 far from its pi flip
-                    return self._fault(f"hand turned {math.degrees(ang):.0f} deg ahead of the gripper "
-                                       f"(> {cfg.max_rot_lag_deg:.0f}): turn slower")
+                    # log-033: no FAULT (it locked the wall check: fast turns at the wrist limit). The extra turn
+                    # beyond the lag limit SLIPS (dropped, like the wall); the gripper still turns <= 90 deg/s.
+                    keep = math.radians(cfg.max_rot_lag_deg) / ang
+                    R_des = pin.exp3(w * keep) @ self.R_target
+                    new_rot = self.anchor_tcp_rot @ R_des.T @ h.rot
+                    self.slip_deg += math.degrees(float(np.linalg.norm(pin.log3(new_rot @ self.anchor_hand_rot.T))))
+                    self.anchor_hand_rot = new_rot
+                    w, ang = w * keep, math.radians(cfg.max_rot_lag_deg)
+                    event = self._note_wall("hand turned faster than the gripper (90 deg/s): extra turn dropped")
                 R_tgt = pin.exp3(w * (lim_r / ang) if ang > lim_r else w) @ self.R_target
                 res, rot_err = self.kin.solve_pose(p_tgt, R_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m,
                                                    max_iter=cfg.ik_max_iter, w_rot=cfg.ik_rot_weight)
@@ -431,12 +443,15 @@ class ArmTeleop:
                 if res.err_m <= cfg.ik_tol_m:  # position reachable: now judge the rotation
                     R_got = self.kin.fk(res.q).rotation
                     gap = math.degrees(float(np.linalg.norm(pin.log3(R_got @ R_des.T))))  # vs the HAND
+                    gap_now = gap
                     t_now = self.n_steps * self.dt
                     if gap > cfg.rot_fault_deg:
                         self.rot_gap_since = self.rot_gap_since if self.rot_gap_since is not None else t_now
-                        if t_now - self.rot_gap_since >= cfg.rot_gap_fault_s:
-                            return self._fault(f"wrist cannot reach that rotation (gripper {gap:.0f} deg from the "
-                                               f"hand for {cfg.rot_gap_fault_s:.1f} s): turn the hand back")
+                        if t_now - self.rot_gap_since >= cfg.rot_gap_fault_s and gap > self.last_gap + 1e-6:
+                            # log-033: rotation edge = WALL (was a FAULT that locked sessions). The gripper must not
+                            # tilt away from the hand on its own, so a move that makes the gap WORSE is held;
+                            # moves that bring the gripper back toward the hand's rotation are accepted.
+                            rot_block = f"wrist cannot keep your hand's rotation here (gripper {gap:.0f} deg off)"
                     else:
                         self.rot_gap_since = None
                     if math.degrees(rot_err) > cfg.ik_rot_tol_deg:
@@ -444,7 +459,7 @@ class ArmTeleop:
             else:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
-            blocked = self._edge(res)   # going deeper into a stretched pose is a WALL first (log-030c)
+            blocked = rot_block or self._edge(res)   # going deeper into a stretched pose is a WALL first (log-030c)
             if blocked is None and res.sigma_min < cfg.min_sigma_hard:
                 # hard floor (Goldfish): an ACCEPTED answer may never be this stretched
                 return self._fault(f"near singular (sigma {res.sigma_min:.3f} < {cfg.min_sigma_hard})")
@@ -455,6 +470,8 @@ class ArmTeleop:
                     # (wall) is as safe as the old FAULT (the jump is never sent) but does not lock the session.
                     blocked = f"joints would jump {jump:.0f} deg (arm near stretched)"
             if blocked is None:
+                if gap_now is not None:
+                    self.last_gap = gap_now
                 self.p_target, self.q_ik, err, sigma = p_tgt, res.q, res.err_m, res.sigma_min
                 if R_tgt is not None:
                     self.R_target = R_tgt

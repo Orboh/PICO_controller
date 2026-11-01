@@ -29,7 +29,7 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 2. [x] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
 3. [x] log-030 + commit (deferred: limit avoidance in wrist mode; not possible: headset wall signal / vibration)
 4. [ ] Short Elephant + Goldfish review of the finished wall code
-5. [ ] Arm (supervised, one arm): push slowly into each edge once (joint limit, stretched arm, 60° posture): arm holds, `WALL`, back works, no FAULT/LOCK
+5. [~] Arm (supervised, one arm): push slowly into each edge once (11-01 run: walls OK, rotation lock fixed in log-033 → repeat) (joint limit, stretched arm, 60° posture): arm holds, `WALL`, back works, no FAULT/LOCK
 6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
 7. [ ] PICO block × 5 (left) with the wall; wall time per episode from the log
 8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
