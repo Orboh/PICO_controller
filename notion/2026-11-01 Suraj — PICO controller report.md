@@ -106,19 +106,20 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [x] Robot wall check on the left arm — PASS (wall check 2, log-034)
 
 **Permissions to get (written, Slack) — owner: Suraj → Kota-san**
-- [ ] joint_1 session drift limit 120° (in person 11-01)
-- [ ] Using the right arm with the PICO (in person 11-01)
-- [ ] The wall behaviour (arm holds at the edge instead of FAULT) on the robot (in person 11-01)
+Kota-san gave these three OKs **in person on 2026-11-01** during the supervised sessions; a written OK (one line in Slack, link added to the runbook's go/no-go item 7) is still needed so it is on record.
+- [ ] **joint_1 session drift limit 120°** (other joints stay 90°). What: the shoulder may turn up to 120° away from where the session started. Why: leader-arm demos of the task need ~105–113°; the old 90° limit locked the PICO pilot. Evidence: robot episode swung ~105° without a FAULT (log-024/025).
+- [ ] **Using the right arm with the PICO.** What: the PICO now drives the right follower too (until now left only, runbook item 5). Why: both arms are needed for the comparison and later for bimanual work. Evidence: first right-arm session, position checks with Kento-san, all directions right, 0 FAULTs; right-arm wall check passed (log-029, log-036).
+- [ ] **The wall behaviour on the robot.** What: at the edge of the workspace (joint limit, stretched arm, drift, large posture change, wrist turning too far or too fast) the arm now **holds** and the hand slips, instead of a FAULT that locked the session after two repeats. Same safety limits; only the reaction changed. Why: four sessions locked on 11-01. Evidence: two wall checks on the left arm (94 wall contacts, no lock) and one on the right (55, no lock) (log-030…036).
 
 **Requests to Kento-san — owner: Suraj**
-- [ ] joint_7 leader/follower start offset (~89°): needed for a fair leader vs. PICO comparison
-- [ ] Left start pose with more room for joint_2 (most common wall: 43 of 94)
-- [ ] Confirm the follower branch `feat/takeei-wood-l1` as the one to use
-- [ ] Proposal: a command channel in the lerobot record loop instead of typed keys (Slack draft in §3, website part)
-- [ ] A two-arm remote receiver in lerobot (needed for both arms with the PICO)
+- [ ] **joint_7 leader/follower start offset (~89°).** In leader-arm mode the follower starts with joint_7 at about +25°, while the pose set (and the PICO) start at about −63°. Needed for a fair leader vs. PICO comparison; then the leader block is recorded again (log-021).
+- [ ] **Left start pose with more room for joint_2.** joint_2 starts only ~9° from its guard on the left arm, and it was the most common wall in the wall check (43 of 94). A start pose a little further from the limit would give the operator more room (log-034).
+- [ ] **Confirm the follower branch.** openarm-orboh on this PC is on `feat/takeei-wood-l1` @ e98e987 and lerobot on `feat/bi-openarm-soft-move-to`; please confirm these are the branches to use for collection.
+- [ ] **Proposal: a command channel in the lerobot record loop** instead of typed keys (→ ← a Esc), so pages and scripts can call "next / discard / return / stop" and read the recorder's state directly. Details and key files in the Slack draft (§3, website part).
+- [ ] **A two-arm remote receiver in lerobot.** `openarm_leader_remote` handles one arm only and `record_bimanual_openarm.sh` refuses remote teleop, so both arms with the PICO is not possible yet.
 
 **Decision to make — Kento san**
-- [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
+- [ ] **Episode rule for demonstrations recorded against a wall.** With the wall, the arm can hold at an edge while the operator's hand keeps moving (the hand "slips"). Such episodes may teach the model motions the leader-arm data never shows. Proposal: mark an episode for review when it spends more than **N seconds at a wall** or has more than **M cm of hand slip** (numbers to decide, e.g. 3 s / 20 cm). The page already logs both per cycle and per episode; once the numbers are set, the check reads the sender log matched to the dataset frames by time and flags those episodes before training.
 
 **Robot tests (supervised, separate spotter)**
 - [x] Wall check on the **right** arm — PASS (55 walls, no lock, log-036); the stretched-arm wall was not reached (the joint_1 120° wall comes first)
