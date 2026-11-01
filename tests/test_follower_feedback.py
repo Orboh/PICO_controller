@@ -183,3 +183,36 @@ def test_headset_facing_from_live_recordings():
         yaws = [headset_facing_deg(r["frame"]["headset"]) for r in rows]
         yaws = [y for y in yaws if y is not None]
         assert abs(sorted(yaws)[len(yaws) // 2] - expect) < 10
+
+
+def test_premove_forward_moves_slowly_with_the_same_gripper_rotation():
+    """log-028: Enter in terminal A moves the HOLD target 10 cm forward, rotation kept, max 10 deg/s."""
+    import numpy as np
+    import pinocchio as pin
+    for side in ("left", "right"):
+        link = StubLink()
+        ch = ArmChannel(side, load_start_pose(side), TeleopConfig(engage_hold_s=0.0), link, DEFAULT_URDF, 1.0,
+                        DEFAULT_TCP_OFFSET_M)
+        M0 = ch.arm.kin.fk(ch.arm.q)
+        ev = ch.premove_forward(0.10, time.monotonic())
+        assert ev.startswith("pre-move: moving"), ev
+        prev, arrived = ch.arm.q.copy(), False
+        for i in range(2000):
+            _, e = _tick(ch, 0.0, i)
+            step = np.max(np.abs(np.rad2deg(ch.arm.q - prev)))
+            assert step <= 10.0 / 50 + 1e-6          # 10 deg/s at 50 Hz
+            prev = ch.arm.q.copy()
+            if e == "pre-move: arrived":
+                arrived = True
+                break
+        assert arrived and ch.arm.state == HOLD
+        M1 = ch.arm.kin.fk(ch.arm.q)
+        d = M1.translation - M0.translation
+        assert abs(d[0] - 0.10) < 0.002 and abs(d[1]) < 0.002 and abs(d[2]) < 0.002
+        assert np.degrees(np.linalg.norm(pin.log3(M1.rotation @ M0.rotation.T))) < 1.0
+
+
+def test_premove_refused_while_engaged():
+    ch = _ch(0.0)
+    ch.arm.state = ENGAGED   # only the gate is tested here
+    assert "refused" in ch.premove_forward(0.10, time.monotonic())

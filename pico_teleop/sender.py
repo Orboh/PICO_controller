@@ -23,13 +23,14 @@ import uuid
 from collections import deque
 import os
 import sys
+import threading
 import time
 
 import numpy as np
 import pinocchio as pin
 
 from .controller import ENGAGED, HOLD, ArmTeleop, PicoAdapter, TeleopConfig
-from .kinematics import DEFAULT_TCP_OFFSET_M, DEFAULT_URDF, ArmKinematics
+from .kinematics import DEFAULT_TCP_OFFSET_M, DEFAULT_URDF, ArmKinematics, q_to_action
 from .poses import POSE_SETS, current_pose_set, load_start_pose, pose_file, pose_file_sha
 from .validate import ECHO_PORTS, FOLLOWER_LIMITS_DEG, PORTS, ActionValidator, ValidatorConfig
 from .frames import R_ROBOT_FROM_XR, quat_xyzw_to_mat
@@ -151,9 +152,31 @@ class ArmChannel:
         self.seq = 0
         self.move: dict | None = None
         self.move_deadline = 0.0
+        self.move_dps: float | None = None   # None = teleop joint speed; pre-move uses a slow speed
         self.last_move_id = None
         self.link_down = False          # receiver silent > link_timeout_s (we keep sending HOLD)
         self.last_refusal_t = 0.0
+
+    def premove_forward(self, fwd_m: float, now: float, dps: float = 10.0) -> str:
+        """Pre-move (log-028, Enter in terminal A): move the HOLD target fwd_m forward (robot x), same gripper
+        rotation, joint-space at `dps`. Only in HOLD with the link ok; the target is validated first."""
+        if self.arm.state != HOLD or self.move is not None:
+            return f"pre-move refused: arm is {self.arm.state} (release the grip; wait for other moves)"
+        if self.link is not None and self.link_state(now) != "ok":
+            return "pre-move refused: follower not linked"
+        kin = self.arm.kin
+        M = kin.fk(self.arm.q)
+        res, rot_err = kin.solve_pose(M.translation + np.array([fwd_m, 0.0, 0.0]), M.rotation, self.arm.q)
+        if res.err_m > 1e-3 or math.degrees(rot_err) > 1.0 or not kin.within_limits(res.q):
+            return f"pre-move refused: {fwd_m * 100:.0f} cm forward not reachable with the same gripper rotation"
+        tgt = q_to_action(res.q, self.arm.gripper)
+        chk = self.val.check(tgt, None, self.side)
+        if not chk.ok:
+            return f"pre-move refused: {chk.reasons}"
+        self.move, self.move_dps, self.move_deadline = tgt, dps, now + 60.0
+        self.arm.reset_squeeze()
+        dq = np.max(np.abs(np.rad2deg(res.q - self.arm.q)))
+        return f"pre-move: moving {fwd_m * 100:.0f} cm forward at {dps:.0f} deg/s (largest joint change {dq:.0f} deg)"
 
     def link_state(self, now: float) -> str:
         """'dry' (no link) / 'waiting' (no echo yet, or not yet 0.5 s of echoes) / 'ok' / 'lost'."""
@@ -227,10 +250,11 @@ class ArmChannel:
         elif ls == "ok" and self.link_down:
             self.link_down, event = False, "link back: release the grip, then squeeze to continue"
         if self.move is not None and (self.arm.state != HOLD or now > self.move_deadline):
-            self.move, event = None, "soft_move_to cancelled (left HOLD or expired)"
+            self.move, self.move_dps, event = None, None, "soft_move_to / pre-move cancelled (left HOLD or expired)"
         if self.move is not None:
-            if self.arm.move_toward(self.move, max_dps=self.arm.cfg.max_joint_speed_dps):
-                event, self.move = "soft_move_to: arrived at the requested pose", None
+            if self.arm.move_toward(self.move, max_dps=self.move_dps or self.arm.cfg.max_joint_speed_dps):
+                event = "pre-move: arrived" if self.move_dps else "soft_move_to: arrived at the requested pose"
+                self.move, self.move_dps = None, None
         else:
             ok = ls in ("ok", "dry") and not self.foreign
             why = {"waiting": "waiting for the receiver (no echo yet: follower not ready)",
@@ -291,6 +315,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                          "forward; no FAULT while engaged (the head may turn to watch the arm)")
     ap.add_argument("--max-link-pause-s", type=float, default=5.0,
                     help="after this long without echo, stop sending for good (runbook R2)")
+    ap.add_argument("--premove-forward-cm", type=float, default=0.0,
+                    help="if > 0: press Enter in this terminal (arm in HOLD, follower linked) to move the arm this "
+                         "far forward slowly, same gripper rotation (log-028; wrist tests). Max 15")
     ap.add_argument("--dry-run", action="store_true", help="compute and print, send nothing")
     ap.add_argument("--replay", default=None, help="drive from a gate-1 recording instead of the PICO")
     ap.add_argument("--duration-s", type=float, default=None)
@@ -343,6 +370,17 @@ def main(argv=None) -> int:
           f"orientation={'ON' if a.orientation else 'off'} "
           f"dry_run={a.dry_run} log={log_path}\n[sender] squeeze GRIP to follow, release to hold; "
           f"TRIGGER closes the gripper. Ctrl-C stops (receiver holds the last pose).", flush=True)
+    if not 0.0 <= a.premove_forward_cm <= 15.0:
+        print("[sender] REFUSED: --premove-forward-cm must be 0..15", file=sys.stderr)
+        return 2
+    enter = threading.Event()
+    if a.premove_forward_cm > 0:
+        def _wait_enter() -> None:
+            for _ in sys.stdin:
+                enter.set()
+        threading.Thread(target=_wait_enter, daemon=True).start()
+        print(f"[sender] PRE-MOVE ready: when the arm is at the start pose and still, the spotter says 'arm may "
+              f"move' and presses Enter here: the arm moves {a.premove_forward_cm:.0f} cm forward slowly", flush=True)
     period, t_start, last_print = 1.0 / a.hz, time.monotonic(), 0.0
     try:
         while a.duration_s is None or time.monotonic() - t_start < a.duration_s:
@@ -350,6 +388,10 @@ def main(argv=None) -> int:
             fr = src.read()
             tr.update(fr)
             rec = {"t": t0, "frame": json.loads(fr.to_json()), "arms": {}}
+            if enter.is_set():
+                enter.clear()
+                for ch in chans:
+                    print(f"[{ch.side}] {ch.premove_forward(a.premove_forward_cm / 100.0, t0)}", flush=True)
             for ch in chans:
                 act, ev = ch.tick(fr.controller(ch.side), tr.fresh(ch.side), f"{tr.stream}/{tr.side_state[ch.side]}",
                                   t0, fr.t_device_ns / 1e9 if fr.t_device_ns else None,
