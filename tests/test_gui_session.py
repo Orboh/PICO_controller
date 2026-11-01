@@ -1,6 +1,7 @@
-"""Collection GUI backend (log-038): order and safety rules, key passthrough, live status, notes. No robot."""
+"""Collection GUI backend (log-038/039): order and safety rules, key passthrough, live status, notes. No robot."""
 import datetime as dt
 import json
+import pathlib
 import sys
 import time
 
@@ -10,8 +11,10 @@ from pico_teleop.gui import session as gs
 from pico_teleop.gui.session import CollectionSession, Options, PtyChild, SenderMonitor, SessionError
 
 ECHO_KEYS = [sys.executable, "-u", "-c",
-             "import os,sys,tty\ntty.setcbreak(0)\nprint('Recording episode 0', flush=True)\n"
-             "while True:\n b=os.read(0,16)\n if not b: break\n print('KEY', b.hex(), flush=True)\n if b==b'\\x1b': break"]
+             "import os,sys,tty\ntty.setcbreak(0)\nprint('  録画中 episode 0（30 秒で自動終了）', flush=True)\n"
+             "while True:\n b=os.read(0,16)\n if not b: break\n print('KEY', b.hex(), flush=True)\n"
+             " if b==b'\\x1b[C': print('INFO Waiting: press a', flush=True)\n if b==b'\\x1b':\n  print('[record] 記録: /nonexistent/run', flush=True); break"]
+OPS = dict(operator="Kento")
 
 
 def _wait(cond, timeout=3.0):
@@ -24,26 +27,40 @@ def _wait(cond, timeout=3.0):
 
 
 class FakeSpawn:
-    """Records the commands; the teleop child prints a start-pose sha line, the recorder echoes keys."""
+    """The teleop child prints a start-pose sha line then waits; the recorder echoes keys."""
 
-    def __init__(self, sha="2ec31fb82bf0"):
-        self.sha, self.calls = sha, []
+    def __init__(self, sha="2ec31fb82bf0", teleop_s=30):
+        self.sha, self.teleop_s, self.calls = sha, teleop_s, []
 
     def __call__(self, argv, env=None, on_line=None):
         self.calls.append((argv, env))
         if "pilot_record.sh" in " ".join(argv):
             return PtyChild(ECHO_KEYS, on_line=on_line)
         return PtyChild([sys.executable, "-u", "-c",
-                         f"import time\nprint('[sender] left: start pose sha256 {self.sha} ok', flush=True)\ntime.sleep(30)"])
+                         f"import time\nprint('[sender] left: start pose sha256 {self.sha} ok', flush=True)\ntime.sleep({self.teleop_s})"],
+                        on_line=on_line)
+
+
+def _sess(tmp_path, **kw):
+    return CollectionSession(runs_dir=tmp_path, spawn=kw.pop("spawn", FakeSpawn()), probe=lambda: [],
+                             gng=kw.pop("gng", lambda side: (True, "ok")), **kw)
 
 
 @pytest.fixture
 def sess(tmp_path):
-    s = CollectionSession(runs_dir=tmp_path, spawn=FakeSpawn(), probe=lambda: [])
+    s = _sess(tmp_path)
     yield s
     for c in (s.recorder, s.teleop):
         if c is not None and c.alive:
             c.proc.kill()
+
+
+def _ready(s, method="pico"):
+    s.start_teleop(Options(method=method, **OPS))
+    assert _wait(lambda: s.sha_line()[1]) or method == "leader"
+    s.confirm_power("Suraj")
+    s.start_recorder()
+    assert _wait(lambda: s.episode == 0)
 
 
 def test_commands_for_both_methods(tmp_path):
@@ -55,55 +72,109 @@ def test_commands_for_both_methods(tmp_path):
     assert argv[-2:] == ["leader", "3"] and env["SIDE"] == "right" and env["OPERATOR"] == "Kento"
 
 
-def test_refuses_when_another_sender_runs(tmp_path):
-    s = CollectionSession(runs_dir=tmp_path, spawn=FakeSpawn(), probe=lambda: ["leader_agent"])
+def test_refusals_before_start(tmp_path):
+    s = CollectionSession(runs_dir=tmp_path, spawn=FakeSpawn(), probe=lambda: ["leader_agent"], gng=lambda side: (True, ""))
     with pytest.raises(SessionError, match="another program"):
-        s.start_teleop(Options())
+        s.start_teleop(Options(**OPS))
+    s = _sess(tmp_path)
+    with pytest.raises(SessionError, match="operator"):
+        s.start_teleop(Options(operator=""))
+    s = _sess(tmp_path, gng=lambda side: (False, "go/no-go items not PASS: 3"))
+    with pytest.raises(SessionError, match="not PASS"):
+        s.start_teleop(Options(**OPS))
 
 
-def test_order_teleop_power_recorder_and_keys(sess):
+def test_order_and_one_recorder_per_teleop(sess):
     with pytest.raises(SessionError, match="teleop first"):
         sess.start_recorder()
-    sess.start_teleop(Options(method="pico", side="left"))
+    sess.start_teleop(Options(**OPS))
     assert _wait(lambda: sess.sha_line()[1])
     with pytest.raises(SessionError, match="spotter"):
         sess.start_recorder()
-    sess.confirm_power()
+    with pytest.raises(SessionError, match="spotter's name"):
+        sess.confirm_power("")
+    sess.confirm_power("Suraj")
     sess.start_recorder()
-    assert _wait(lambda: sess.episode == 0)
+    assert _wait(lambda: sess.episode == 0 and sess.recording_now)
     sess.key("next")
     assert _wait(lambda: any("KEY 1b5b43" in l for l in sess.recorder.lines))   # right arrow reached the recorder
+    assert _wait(lambda: not sess.recording_now)                                   # "Waiting:" ends the episode
     with pytest.raises(SessionError, match="end the recording first"):
         sess.stop_teleop()
+    sess.key("stop")
+    assert _wait(lambda: not sess.recorder_running)
+    sess.poll()
+    with pytest.raises(SessionError, match="one recording per teleop"):    # Elephant GUI #1 (R2)
+        sess.start_recorder()
+    with pytest.raises(SessionError, match="already had a recorder"):
+        sess.confirm_power("Suraj")
+    assert sess.run_dir == "/nonexistent/run"
 
 
 def test_wrong_start_pose_sha_blocks_the_recorder(tmp_path):
-    s = CollectionSession(runs_dir=tmp_path, spawn=FakeSpawn(sha="deadbeef0000"), probe=lambda: [])
-    s.start_teleop(Options(method="pico", side="left"))
+    s = _sess(tmp_path, spawn=FakeSpawn(sha="deadbeef0000"))
+    s.start_teleop(Options(**OPS))
     assert _wait(lambda: s.sha_line()[0] is not None)
-    s.confirm_power()
+    s.confirm_power("Suraj")
     with pytest.raises(SessionError, match="sha"):
         s.start_recorder()
     s.teleop.proc.kill()
 
 
-def test_esc_refused_while_engaged_rule_r4(sess):
-    sess.start_teleop(Options(method="pico"))
-    _wait(lambda: sess.sha_line()[1])
-    sess.confirm_power()
-    sess.start_recorder()
-    sess.monitor.status.state = "ENGAGED"
-    with pytest.raises(SessionError, match="release the grip"):
+def test_r4_engaged_refusals_and_stale_status(sess):
+    _ready(sess)
+    st = sess.monitor.status
+    st.state, st.read_at = "ENGAGED", time.monotonic()
+    for k in ("stop", "reset", "rerecord"):
+        with pytest.raises(SessionError, match="release the grip"):
+            sess.key(k)
+    st.read_at = time.monotonic() - 5.0          # a crashed sender's last line is not trusted (Elephant GUI #2)
+    sess.key("reset")
+
+
+def test_locked_and_foreign_refuse_next(sess, tmp_path):
+    _ready(sess)
+    sess.monitor.status.locked = True
+    with pytest.raises(SessionError, match="LOCKED"):
+        sess.key("next")
+    p = tmp_path / "f.jsonl"
+    p.write_text(json.dumps({"t": 1.0, "frame": {}, "arms": {"left": {"state": "FAULT", "event":
+                 "FAULT: foreign echo | echo of packets we did not send: ANOTHER SENDER on this port. Engaging is locked"}}}) + "\n")
+    m = SenderMonitor(p, "left")
+    assert m.poll().locked and m.status.foreign
+
+
+def test_leader_needs_hands_and_held_confirmations(sess):
+    _ready(sess, method="leader")
+    with pytest.raises(SessionError, match="leader arm is held"):
         sess.key("stop")
-    sess.monitor.status.state = "HOLD"
-    sess.key("stop")
-
-
-def test_leader_stop_needs_the_leader_arm_held(sess):
-    sess.start_teleop(Options(method="leader"))
+    sess.key("stop", hands_off=True)
+    assert _wait(lambda: not sess.recorder_running)
     with pytest.raises(SessionError, match="LEADER arm"):
         sess.stop_teleop()
     sess.stop_teleop(leader_held=True)
+
+
+def test_premove_only_after_power_and_recorder(sess):
+    sess.start_teleop(Options(premove_cm=10, **OPS))
+    with pytest.raises(SessionError, match="after"):
+        sess.premove()
+
+
+def test_rerecord_discards_the_notes_and_shutdown_keeps_a_leader_agent(sess):
+    _ready(sess, method="leader")
+    sess.set_note(0, grasp=True)
+    sess.key("rerecord")
+    assert 0 not in sess.notes
+    msgs = sess.shutdown()
+    assert any("LEADER AGENT LEFT RUNNING" in m for m in msgs) and sess.teleop_running
+
+
+def test_buffer_rollover_keeps_new_lines(tmp_path):
+    c = PtyChild([sys.executable, "-u", "-c", "for i in range(600): print('line', i)"], tail=100)
+    assert _wait(lambda: c.count >= 600)
+    lines, n = c.new_lines(590)
+    assert lines == [f"line {i}" for i in range(590, 600)] and n == 600
 
 
 def test_monitor_reads_state_walls_and_input_rate(tmp_path):
@@ -117,20 +188,38 @@ def test_monitor_reads_state_walls_and_input_rate(tmp_path):
     m = SenderMonitor(p, "left")
     s = m.poll()
     assert s.state == "ENGAGED" and s.wall == "joint_2 at its limit" and s.wall_s == pytest.approx(10 / 50)
-    assert 25 <= s.input_hz <= 31 and m.events[-1][1].startswith("WALL")
+    assert 25 <= s.input_hz <= 31 and m.events[-1][1].startswith("WALL") and m.fresh()
+
+
+def test_recorder_patterns_match_the_real_console_log():
+    log = pathlib.Path.home() / "collections" / "20261101T105857Z-pilot-pico" / "console.log"
+    if not log.exists():
+        pytest.skip("real console.log not on this PC")
+    text = log.read_text(encoding="utf-8", errors="replace")
+    assert gs.RECORDING.search(text) and gs.WAITING.search(text)
+    assert gs.RUN_DIR.search(text).group(1).endswith("pilot-pico")
 
 
 def test_go_no_go_parse(tmp_path):
     rb = tmp_path / "rb.md"
-    rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 3 | e | f | **pending**: x |\n")
+    rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 3 | e | f | FAIL: no e-stop |\n"
+                  "| 5 | arm | c | left |\n")
     ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 2))
     assert not ok and "3" in why
-    ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 3))
-    assert not ok and "no go/no-go column" in why
+    rb.write_text("| # | Item | x | 2026-11-02 |\n|---|---|---|---|\n| 1 | a | b | PASS |\n| 5 | arm | c | left |\n")
+    assert gs.go_no_go_today(rb, dt.date(2026, 11, 2), side="left")[0]
+    ok, why = gs.go_no_go_today(rb, dt.date(2026, 11, 2), side="right")
+    assert not ok and "item 5" in why
+    assert "no go/no-go column" in gs.go_no_go_today(rb, dt.date(2026, 11, 3))[1]
+
+
+def test_go_no_go_real_runbook_today_parses():
+    ok, why = gs.go_no_go_today(today=dt.date(2026, 11, 1), side="left")
+    assert ok, why
 
 
 def test_notes_are_saved(sess):
-    sess.start_teleop(Options(method="leader"))
+    sess.start_teleop(Options(method="leader", **OPS))
     sess.set_note(0, grasp=True, text="dropped at the bin edge")
     data = json.loads(next(sess.runs_dir.glob("*-notes.json")).read_text())
     assert data["episodes"]["0"]["grasp"] is True and data["options"]["method"] == "leader"

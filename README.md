@@ -91,22 +91,28 @@ To recover: open the grip fully, bring the hand back to where it was when you en
 
 The sender prints the state of each arm once per second and every event as it happens.
 
-## Collection GUI (log-038): leader arm or PICO, one page
+## Collection GUI (log-038, review fixes log-039): leader arm or PICO, one page
 ```bash
 bash ~/projects/PICO-controller/scripts/gui.sh     # then open http://localhost:8090 on this PC
 ```
 ![collection GUI](docs/img/collection-gui.png)
-- **1 Setup**: method (PICO / leader arm), arm (left / right), episodes, seconds, operator, task; PICO: smooth motion
-  (60 Hz + ease in/out, on), wrist rotation, pre-move distance.
-- **2 Run, in this order**: ① Start teleop (PICO sender or leader agent) → ② spotter says "arm may move" and switches
-  the arm's power on, then presses the button → ③ Start recording (the arm moves to the start pose) → ▶ Next episode /
-  ↺ Re-record / ⟲ Reset / ■ Stop recording (the recorder's → ← a Esc) → ④ Stop teleop.
-- Refused by the page: a start while another sender / leader agent / recorder runs; recording before the spotter
-  confirmed; a wrong start-pose sha (PICO); **Stop recording while the operator squeezes (R4)**; stopping the teleop
-  while recording; stopping the leader agent without "the leader arm is held".
-- **Live status** (PICO): HOLD / ENGAGED / FAULT / LOCKED, link, PICO input rate, facing, current WALL, wall time;
-  **Episodes**: grasp / placed / note per episode with wall time, saved to `runs/gui-<method>-<arm>-<time>-notes.json`.
-- The page never switches power; the spotter keeps the e-stop and the switch. Only on 127.0.0.1 by default.
+- **Roles**: a **page operator** at the PC presses the buttons; the **spotter** keeps the e-stop and the power switch
+  and confirms step ② by name; the wearer / leader operator teleoperates. Only one browser tab controls (others watch).
+- **1 Setup** (locked while running): method, arm, episodes, seconds, operator name (required, latin letters), task
+  (same text for both methods); PICO: smooth motion (60 Hz + ease in/out, on), wrist rotation, pre-move.
+- **2 Run** — the page shows "Now: …" and greys out what cannot be pressed yet: ① Start teleop → ② spotter name +
+  "arm may move, power ON" → ③ Start recording (the arm moves) → ▶ Next episode / ↺ Discard + re-record /
+  ⟲ Return to start / ■ End recording (**not an e-stop**) → ④ Stop teleop. **One recording per teleop start** (R2).
+- Refused: today's go/no-go not all PASS or item 5 not naming the arm; another sender / leader agent / recorder
+  running; recording before ②; wrong start-pose sha; End / Return / Discard while the operator squeezes (R4); Next
+  after LOCKED; leader method: End / Return / Stop teleop without "the leader arm is held".
+- **Banners**: LOCKED, another sender (E-STOP), teleop or recorder exited during recording (the episode is flagged),
+  the open joint_7 offset for the leader method. Status goes grey ("EXITED") when the sender is gone.
+- **Live status** (PICO): state, link, input rate, facing, boundary (wall) message and time; recording episode + time.
+- **Episodes**: grasp / placed / note + boundary time, saved at once to `runs/gui-<method>-<arm>-<time>-notes.json`
+  (with the settings, spotter, run folder and dataset path from the recorder's manifest); a discarded take's notes go.
+- Closing the GUI ends the recorder (Esc) and stops a PICO sender; a **leader agent is left running** (its arm would go
+  limp): hold the leader arm and stop it in a terminal. The page never switches power.
 
 ## Setup (once per PC)
 

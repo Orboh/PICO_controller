@@ -122,3 +122,10 @@ Before: no leader_agent running (`pgrep -af leader_agent` empty), go/no-go incl.
   (tracking jumps): release; "ready".
 - **Stop rules:** the same FAULT twice or `LOCKED` → stop the session; wrong direction → release, stop, log.
 - PASS is judged by the spotter's eye (no follower feedback); the log gives the commanded values only.
+
+## Collection with the GUI (log-038/039)
+`bash ~/projects/PICO-controller/scripts/gui.sh` → http://localhost:8090. Three people: page operator (PC), spotter
+(e-stop + power switch, confirms ② by name), wearer / leader operator. The page follows this runbook's order and
+refuses steps out of order; it is **not** an emergency stop. Today's go/no-go column must be all PASS first.
+After every recording: ④ Stop teleop, then ① again (one recording per teleop start, R2).
+Do not close the GUI while a leader agent runs and nobody holds the leader arm.

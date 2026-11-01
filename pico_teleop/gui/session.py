@@ -1,10 +1,12 @@
-"""Collection session behind the GUI (log-038): one arm, two methods (leader arm or PICO), the same recorder.
+"""Collection session behind the GUI (log-038, review fixes log-039): one arm, two methods (leader arm or PICO),
+the same recorder.
 
 Learned from the Dream-Lab-OpenArm Collect tab (`october 23/workspace/collect.py`): the recorder runs UNCHANGED
 in a pseudo-terminal and the page types its keys (right arrow, left arrow, `a`, Esc) into it, so the data is saved
 exactly as from the terminal; the page only shows what the scripts print. New here: the teleop side (leader agent
-or PICO sender) is a second child, the PICO sender's per-cycle JSONL is read for live status, and the safety rules
-of the runbook are checked before every action (R2 order, R4 release before esc, leader held before its stop).
+or PICO sender) is a second child, the PICO sender's per-cycle JSONL is read for live status, and the runbook's
+rules are checked before every action (go/no-go, R2 order and one recorder per sender, R4 release before esc,
+LOCKED stops the block, the leader arm held before its agent stops).
 
 No robot power is ever switched here; the spotter keeps the e-stop and the power switch.
 """
@@ -29,11 +31,15 @@ METHODS = ("pico", "leader")
 SIDES = ("left", "right")
 KEYS = {"next": b"\x1b[C", "rerecord": b"\x1b[D", "reset": b"a", "stop": b"\x1b"}
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\r")
-RECORDING = re.compile(r"Recording episode (\d+)|録画中 episode (\d+)")
-RESET = re.compile(r"Reset the environment|リセット")
-DATASET = re.compile(r"(/\S*/huggingface/lerobot/\S+)|root[=:]\s*(\S+)")
+RECORDING = re.compile(r"Recording episode (\d+)|録画中 episode (\d+)")   # an episode starts (fork's banner, 2026-10)
+WAITING = re.compile(r"Waiting:|Escape key pressed")                       # an episode ended (lerobot fork log line)
+RUN_DIR = re.compile(r"\[record\] 記録: (\S+)")                            # printed at the end (console.log 11-01)
+SHA = re.compile(r"sha256 ([0-9a-f]{12})")
 EXPECTED_SHA = {"left": "2ec31fb82bf0", "right": "a3b97b8e9d66"}
 OTHER_SENDERS = ("pico_teleop.sender", "leader_agent", "run_leader_agent", "lerobot-record", "lerobot-teleoperate")
+OPERATOR_NAME = re.compile(r"[A-Za-z][A-Za-z0-9 ._-]*")   # latin letters: it goes into the dataset manifest as typed
+EMERGENCY = " — in an emergency: the e-stop, not this page."
+STALE_S = 1.0             # a sender status older than this is not trusted (crashed sender, Elephant GUI #2)
 
 
 class SessionError(Exception):
@@ -42,7 +48,7 @@ class SessionError(Exception):
 
 @dataclasses.dataclass
 class Options:
-    """What the page's settings pass to the scripts."""
+    """What the page's settings pass to the scripts (locked once ① is pressed)."""
 
     method: str = "pico"
     side: str = "left"
@@ -59,8 +65,10 @@ def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO
     """The teleop child: the PICO sender (with its JSONL log) or the leader agent."""
     if o.method == "leader":
         return ["bash", str(repo / "scripts" / "leader_sender.sh"), o.side]
+    # 30 s link pause (episode saves pause the receiver 1-6 s); one recorder per sender start is enforced, so a
+    # restarted follower never gets this sender's held pose (R2, Elephant GUI #1)
     argv = ["bash", str(repo / "scripts" / "pico_env.sh"), "python", "-u", "-m", "pico_teleop.sender", "--host", "127.0.0.1",
-            "--arms", o.side, "--confirm-follower-at-start-pose", "--max-link-pause-s", "300", "--log", str(log_path)]
+            "--arms", o.side, "--confirm-follower-at-start-pose", "--max-link-pause-s", "30", "--log", str(log_path)]
     if o.smooth:
         argv += ["--hz", "60", "--max-joint-acc-dps2", "300"]
     if o.wrist:
@@ -72,9 +80,7 @@ def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO
 
 def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], dict[str, str]]:
     """The recorder child: `pilot_record.sh` unchanged (same dataset settings for both methods)."""
-    env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task}
-    if o.operator.strip():
-        env["OPERATOR"] = o.operator.strip()
+    env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip()}
     return ["bash", str(repo / "scripts" / "pilot_record.sh"), o.method, str(int(o.episodes))], env
 
 
@@ -84,6 +90,7 @@ class PtyChild:
     def __init__(self, argv: list[str], env: dict[str, str] | None = None, cwd: pathlib.Path = REPO,
                  on_line: Callable[[str], None] | None = None, tail: int = 400):
         self.lines: deque[str] = deque(maxlen=tail)
+        self.count = 0                       # lines ever read (the deque rolls over; Elephant GUI #8)
         self.on_line = on_line
         master, slave = pty.openpty()
         full_env = {**os.environ, **(env or {})}
@@ -97,6 +104,12 @@ class PtyChild:
     @property
     def alive(self) -> bool:
         return self.proc.poll() is None
+
+    def new_lines(self, seen: int) -> tuple[list[str], int]:
+        """Lines after `seen` (as many as are still kept) and the new count."""
+        n = self.count - seen
+        items = list(self.lines)
+        return (items[-n:] if 0 < n <= len(items) else items if n > 0 else []), self.count
 
     def _read(self) -> None:
         buf = b""
@@ -113,6 +126,7 @@ class PtyChild:
                 text = ANSI.sub("", raw.decode("utf-8", "replace")).strip()
                 if text:
                     self.lines.append(text)
+                    self.count += 1
                     if self.on_line:
                         self.on_line(text)
         try:
@@ -147,9 +161,11 @@ class ArmStatus:
     input_hz: float = 0.0
     facing_deg: float | None = None
     locked: bool = False
+    foreign: bool = False
     last_event: str = ""
     wall_s: float = 0.0
     t: float = 0.0
+    read_at: float = 0.0        # time.monotonic() when the latest cycle was read
 
 
 class SenderMonitor:
@@ -159,11 +175,15 @@ class SenderMonitor:
         self.path, self.side, self.facing = path, side, facing
         self.status = ArmStatus()
         self.events: deque[tuple[float, str]] = deque(maxlen=200)
+        self.n_events = 0
         self.hz = 50.0
         self._pos = 0
         self._dev_ts: deque[tuple[float, int]] = deque(maxlen=200)
         self._t0: float | None = None
         self.wall_cycles = 0
+
+    def fresh(self, now: float | None = None) -> bool:
+        return (now or time.monotonic()) - self.status.read_at < STALE_S
 
     def poll(self) -> ArmStatus:
         """Read the new lines; cheap enough to call twice per second."""
@@ -176,6 +196,7 @@ class SenderMonitor:
         if end < 0:
             return self.status
         self._pos += end + 1
+        got = False
         for line in chunk[: end + 1].splitlines():
             try:
                 d = json.loads(line)
@@ -186,6 +207,9 @@ class SenderMonitor:
                     self.hz = float(d["args"].get("hz", 50.0))
                 continue
             self._cycle(d)
+            got = True
+        if got:
+            self.status.read_at = time.monotonic()
         return self.status
 
     def _cycle(self, d: dict) -> None:
@@ -209,10 +233,13 @@ class SenderMonitor:
         ev = a.get("event")
         if ev:
             s.last_event = ev
-            if "LOCKED" in ev and "refused" not in ev:
+            if "ANOTHER SENDER" in ev:
+                s.locked = s.foreign = True
+            elif "LOCKED" in ev and "refused" not in ev:
                 s.locked = True
             if not ev.startswith("engage refused") or not self.events or not self.events[-1][1].startswith("engage refused"):
                 self.events.append((s.t, ev))
+                self.n_events += 1
 
 
 def other_senders(pgrep: Callable[[str], bool] | None = None) -> list[str]:
@@ -223,8 +250,13 @@ def other_senders(pgrep: Callable[[str], bool] | None = None) -> list[str]:
     return [p for p in OTHER_SENDERS if probe(p)]
 
 
-def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md", today: dt.date | None = None) -> tuple[bool, str]:
-    """Is today's go/no-go column in the runbook filled (all PASS / left / n/a / accepted, none pending)?"""
+GOOD_CELL = re.compile(r"^\**\s*(pass|accepted|n/a|left|right|0\.1025)", re.I)
+
+
+def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md", today: dt.date | None = None,
+                   side: str | None = None) -> tuple[bool, str]:
+    """Today's go/no-go column: every cell must start with PASS / accepted / n/a / the side (Elephant GUI #3),
+    and item 5 must name the arm used. Returns (ok, plain reason)."""
     day = (today or dt.date.today()).isoformat()
     try:
         lines = runbook.read_text(encoding="utf-8").splitlines()
@@ -233,35 +265,54 @@ def go_no_go_today(runbook: pathlib.Path = REPO / "docs" / "hardware-runbook.md"
     header = next((l for l in lines if l.startswith("| # | Item")), "")
     cols = [c.strip() for c in header.strip("|").split("|")]
     if day not in cols:
-        return False, f"no go/no-go column for {day} in docs/hardware-runbook.md"
+        return False, f"no go/no-go column for {day} in docs/hardware-runbook.md: fill it first"
     k = cols.index(day)
-    pending = []
+    bad, item5 = [], ""
     for l in lines:
         if re.match(r"\|\s*\d+\s*\|", l):
             cells = [c.strip() for c in l.strip("|").split("|")]
-            if k < len(cells) and ("pending" in cells[k].lower() or not cells[k]):
-                pending.append(cells[0])
-    return (not pending, "all items filled" if not pending else "pending items: " + ", ".join(pending))
+            cell = cells[k] if k < len(cells) else ""
+            if cells[0] == "5":
+                item5 = cell
+            if not cell or "pending" in cell.lower() or "fail" in cell.lower() or not GOOD_CELL.match(cell):
+                bad.append(cells[0])
+    if bad:
+        return False, "go/no-go items not PASS: " + ", ".join(bad)
+    if side and side not in item5.lower():
+        return False, f"go/no-go item 5 does not approve the {side} arm today ({item5[:60]})"
+    return True, "all items PASS" + (f" · item 5: {item5[:70]}" if item5 else "")
 
 
 class CollectionSession:
     """Teleop child + recorder child + notes, with the runbook's order and safety rules."""
 
     def __init__(self, runs_dir: pathlib.Path = REPO / "runs", spawn: Callable[..., PtyChild] = PtyChild,
-                 probe: Callable[[], list[str]] = other_senders, facing: Callable[[list], float | None] | None = None):
+                 probe: Callable[[], list[str]] = other_senders, facing: Callable[[list], float | None] | None = None,
+                 gng: Callable[[str], tuple[bool, str]] | None = None):
         self.runs_dir, self.spawn, self.probe, self.facing = runs_dir, spawn, probe, facing
+        self.gng = gng or (lambda side: go_no_go_today(side=side))
         self.opts = Options()
         self.teleop: PtyChild | None = None
         self.recorder: PtyChild | None = None
         self.monitor: SenderMonitor | None = None
         self.tag = ""
+        self.spotter = ""
         self.power_confirmed = False
+        self.recorder_used = False           # one recorder per teleop start (R2, Elephant GUI #1)
         self.episode: int | None = None
+        self.recording_now = False
+        self.episode_started: float | None = None
+        self.run_dir: str | None = None
         self.dataset: str | None = None
         self.episode_walls: dict[int, float] = {}
         self.notes: dict[int, dict] = {}
+        self.alarm = ""                      # a child died while it mattered (shown as a red banner)
+        self.controller: str | None = None   # the one browser client allowed to press buttons
         self._wall_at_start = 0.0
+        self._lock = threading.Lock()
+        self._teleop_was_alive = self._recorder_was_alive = False
         self.log: deque[str] = deque(maxlen=300)
+        self.n_log = 0
 
     # ---- state ---------------------------------------------------------------------------------------------
     @property
@@ -272,77 +323,110 @@ class CollectionSession:
     def recorder_running(self) -> bool:
         return self.recorder is not None and self.recorder.alive
 
+    @property
+    def running(self) -> bool:
+        return self.teleop_running or self.recorder_running
+
     def arm_engaged(self) -> bool:
-        return self.monitor is not None and self.monitor.status.state == "ENGAGED"
+        """ENGAGED only from a live sender with a fresh status (a crashed sender's last line is not trusted)."""
+        return (self.monitor is not None and self.teleop_running and self.monitor.fresh()
+                and self.monitor.status.state == "ENGAGED")
+
+    def locked(self) -> bool:
+        return self.monitor is not None and self.monitor.status.locked
 
     def sha_line(self) -> tuple[str | None, bool]:
-        """The sender's start-pose sha and whether it is the expected one for this arm (PICO only)."""
-        if self.teleop is None:
-            return None, False
-        for line in self.teleop.lines:
-            m = re.search(r"sha256 ([0-9a-f]{12})", line)
-            if m:
-                return m.group(1), m.group(1) == EXPECTED_SHA[self.opts.side]
-        return None, False
+        sha = getattr(self, "_sha", None)
+        return sha, sha == EXPECTED_SHA[self.opts.side]
 
     # ---- actions -------------------------------------------------------------------------------------------
     def start_teleop(self, o: Options) -> str:
-        if self.teleop_running or self.recorder_running:
+        if self.running:
             raise SessionError("a session is already running: stop it first")
         if o.method not in METHODS or o.side not in SIDES:
             raise SessionError("choose a method and an arm")
+        if not OPERATOR_NAME.fullmatch(o.operator.strip()):
+            raise SessionError("type the operator's name in latin letters (it goes into the dataset)")
+        ok, why = self.gng(o.side)
+        if not ok:
+            raise SessionError(why)
         busy = self.probe()
         if busy:
             raise SessionError("another program already drives an arm: " + ", ".join(busy) + " (stop it first, rule R2)")
-        self.opts = o
+        self.opts = dataclasses.replace(o, operator=o.operator.strip())
         self.tag = f"gui-{o.method}-{o.side}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         log_path = self.runs_dir / f"{self.tag}-sender.jsonl"
-        self.teleop = self.spawn(teleop_command(o, log_path), on_line=None)
+        self._sha = None
+        self.teleop = self.spawn(teleop_command(self.opts, log_path), on_line=self._teleop_line)
         self.monitor = SenderMonitor(log_path, o.side, self.facing) if o.method == "pico" else None
-        self.power_confirmed, self.episode, self.dataset = False, None, None
+        self.power_confirmed, self.recorder_used, self.spotter, self.alarm = False, False, "", ""
+        self.episode, self.recording_now, self.run_dir, self.dataset = None, False, None, None
         self.episode_walls, self.notes = {}, {}
-        self._note(f"started {o.method} teleop for the {o.side} arm ({self.tag})")
+        self._teleop_was_alive, self._recorder_was_alive = True, False
+        self._note(f"① started {o.method} teleop for the {o.side} arm ({self.tag}), operator {self.opts.operator}")
         return self.tag
 
-    def confirm_power(self) -> None:
+    def confirm_power(self, spotter: str) -> None:
         """The spotter said 'arm may move' and switched the arm's power on (the page cannot see it)."""
         if not self.teleop_running:
             raise SessionError("start the teleop first (rule R2: sender, then power, then the follower)")
-        self.power_confirmed = True
-        self._note("spotter: arm power on, area clear")
+        if not OPERATOR_NAME.fullmatch(spotter.strip()):
+            raise SessionError("type the spotter's name: the spotter confirms, not the page operator")
+        if self.recorder_used:
+            raise SessionError("this teleop already had a recorder: ④ stop the teleop and start again (rule R2)")
+        self.spotter, self.power_confirmed = spotter.strip(), True
+        self._note(f"② spotter {self.spotter}: \"arm may move\", {self.opts.side} arm power ON, area clear")
 
     def start_recorder(self) -> None:
         if not self.teleop_running:
             raise SessionError("start the teleop first")
+        if self.recorder_used:
+            raise SessionError("one recording per teleop start: ④ stop the teleop, then ① again (rule R2)")
         if not self.power_confirmed:
-            raise SessionError("the spotter must confirm 'arm may move' and the arm's power first")
-        if self.recorder_running:
-            raise SessionError("the recorder is already running")
+            raise SessionError("the spotter must confirm 'arm may move' and the arm's power first (②)")
+        if self.locked():
+            raise SessionError("the sender is LOCKED: stop the teleop (④) and start again" + EMERGENCY)
         if self.opts.method == "pico":
             sha, ok = self.sha_line()
             if not ok:
                 raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {EXPECTED_SHA[self.opts.side]}")
         argv, env = recorder_command(self.opts)
+        self.recorder_used = True
         self.recorder = self.spawn(argv, env=env, on_line=self._recorder_line)
-        self._note("recorder started: THE ARM MOVES BY ITSELF to the start pose")
+        self._recorder_was_alive = True
+        self._note("③ recorder started: THE ARM MOVES BY ITSELF to the start pose")
 
-    def key(self, name: str) -> None:
-        """Type a recorder key. Esc (stop) is refused while a PICO arm is ENGAGED (rule R4)."""
+    def key(self, name: str, hands_off: bool = False) -> None:
+        """Type a recorder key, with the runbook's refusals."""
         if name not in KEYS:
             raise SessionError(f"unknown key {name}")
         if not self.recorder_running:
             raise SessionError("the recorder is not running")
-        if name == "stop" and self.arm_engaged():
-            raise SessionError("the operator is still squeezing: release the grip first (rule R4), then stop")
+        if name in ("next", "rerecord") and self.locked():
+            raise SessionError("the sender is LOCKED: end the recording, stop the teleop, start again" + EMERGENCY)
+        if name in ("stop", "reset", "rerecord") and self.arm_engaged():
+            raise SessionError("the operator is still squeezing: release the grip first (rule R4)" + EMERGENCY)
+        if name in ("stop", "reset") and self.opts.method == "leader" and not hands_off:
+            raise SessionError("leader method: confirm the leader arm is held still / hands ready (R4)" + EMERGENCY)
         self.recorder.send(KEYS[name])
-        self._note({"next": "→ next / start episode", "rerecord": "← re-record", "reset": "a: reset (the arm moves)",
+        if name == "rerecord" and self.episode is not None:
+            with self._lock:
+                self.notes.pop(self.episode, None)       # the discarded take's notes go with it
+                self.episode_walls.pop(self.episode, None)
+        self._note({"next": "→ next / start episode", "rerecord": "← discard this take and re-record",
+                    "reset": "a: return to the start pose (the arm moves" + (", the leader arm too" if self.opts.method == "leader" else "") + ")",
                     "stop": "esc: end recording (the arm returns and goes limp)"}[name])
+        self.save_notes()
 
     def premove(self) -> None:
         if not (self.teleop_running and self.opts.method == "pico" and self.opts.premove_cm > 0):
             raise SessionError("pre-move needs a running PICO sender started with a pre-move distance")
-        if self.arm_engaged():
-            raise SessionError("release the grip first")
+        if not (self.power_confirmed and self.recorder_running):
+            raise SessionError("pre-move only after ② and ③ (the arm is at the start pose)")
+        if self.recording_now:
+            raise SessionError("not during an episode")
+        if not (self.monitor and self.monitor.fresh() and self.monitor.status.state == "HOLD"):
+            raise SessionError("the sender must be in HOLD (grip released) with a fresh status")
         self.teleop.send(b"\n")
         self._note(f"pre-move: the arm moves {self.opts.premove_cm:g} cm forward slowly")
 
@@ -351,47 +435,114 @@ class CollectionSession:
         if not self.teleop_running:
             raise SessionError("the teleop is not running")
         if self.recorder_running:
-            raise SessionError("end the recording first (Stop recording), then stop the teleop")
+            raise SessionError("end the recording first (End recording), then stop the teleop")
         if self.opts.method == "leader" and not leader_held:
             raise SessionError("Ctrl-C makes the LEADER arm go limp: hold the leader arm, then confirm")
         self.teleop.interrupt()
-        self._note("teleop stopped (Ctrl-C)")
+        self._note("④ teleop stopped (Ctrl-C)")
+
+    def shutdown(self) -> list[str]:
+        """The GUI is closing (Elephant GUI #7): end the recorder with Esc, stop a PICO sender with Ctrl-C.
+        A leader agent is NOT stopped (its arm would go limp in the operator's hands): it is reported."""
+        msgs = []
+        if self.recorder_running:
+            try:
+                self.recorder.send(KEYS["stop"])
+            except (SessionError, OSError):
+                pass
+            if self.recorder.wait(20.0) is None:
+                self.recorder.interrupt()
+            msgs.append("recorder ended (Esc)")
+        if self.teleop_running:
+            if self.opts.method == "pico":
+                self.teleop.interrupt()
+                msgs.append("PICO sender stopped")
+            else:
+                msgs.append("LEADER AGENT LEFT RUNNING: hold the leader arm, then stop it in a terminal (Ctrl-C)")
+        return msgs
 
     def set_note(self, episode: int, grasp: bool | None = None, placed: bool | None = None, text: str | None = None) -> None:
-        n = self.notes.setdefault(episode, {"grasp": False, "placed": False, "text": ""})
-        if grasp is not None:
-            n["grasp"] = grasp
-        if placed is not None:
-            n["placed"] = placed
-        if text is not None:
-            n["text"] = text
+        with self._lock:
+            n = self.notes.setdefault(episode, {"grasp": False, "placed": False, "text": ""})
+            if grasp is not None:
+                n["grasp"] = grasp
+            if placed is not None:
+                n["placed"] = placed
+            if text is not None:
+                n["text"] = text
         self.save_notes()
 
     def save_notes(self) -> pathlib.Path | None:
         if not self.tag:
             return None
+        with self._lock:
+            eps = {str(k): {**v, "wall_s": round(self.episode_walls.get(k, 0.0), 1)} for k, v in sorted(self.notes.items())}
         p = self.runs_dir / f"{self.tag}-notes.json"
-        p.write_text(json.dumps({"tag": self.tag, "options": dataclasses.asdict(self.opts), "dataset": self.dataset,
-                                 "episodes": {str(k): {**v, "wall_s": round(self.episode_walls.get(k, 0.0), 1)}
-                                              for k, v in sorted(self.notes.items())}}, indent=1), encoding="utf-8")
+        p.write_text(json.dumps({"tag": self.tag, "options": dataclasses.asdict(self.opts), "spotter": self.spotter,
+                                 "run_dir": self.run_dir, "dataset": self.dataset, "alarm": self.alarm,
+                                 "episodes": eps}, indent=1), encoding="utf-8")
         return p
 
     # ---- updates -------------------------------------------------------------------------------------------
     def poll(self) -> None:
         if self.monitor is not None:
             self.monitor.poll()
-            if self.episode is not None:
+            if self.recording_now and self.episode is not None:
                 self.episode_walls[self.episode] = self.monitor.status.wall_s - self._wall_at_start
+        # a child died while it mattered: alarm, flag the episode, keep the notes (goldfish GUI #3)
+        if self._teleop_was_alive and not self.teleop_running:
+            self._teleop_was_alive = False
+            code = self.teleop.proc.returncode if self.teleop else None
+            if self.recorder_running:
+                self.alarm = (f"TELEOP EXITED (code {code}) WHILE RECORDING: spotter watch the arm; release, then End recording"
+                              + EMERGENCY)
+                self._flag("teleop exited")
+            self._note(f"teleop exited (code {code})")
+        if self._recorder_was_alive and not self.recorder_running:
+            self._recorder_was_alive = False
+            code = self.recorder.proc.returncode if self.recorder else None
+            if self.recording_now:
+                self.alarm = f"RECORDER EXITED (code {code}) DURING AN EPISODE: check the dataset" + EMERGENCY
+                self._flag("recorder exited")
+            self.recording_now, self.power_confirmed = False, False
+            self._read_manifest()
+            self._note(f"recorder exited (code {code}); next: ④ stop the teleop" + (f"; data: {self.dataset}" if self.dataset else ""))
+            self.save_notes()
+
+    def _flag(self, why: str) -> None:
+        if self.episode is not None:
+            with self._lock:
+                n = self.notes.setdefault(self.episode, {"grasp": False, "placed": False, "text": ""})
+                n["text"] = (n["text"] + f" [{why}]").strip()
+
+    def _read_manifest(self) -> None:
+        if not self.run_dir:
+            return
+        try:
+            m = json.loads((pathlib.Path(self.run_dir) / "manifest.json").read_text(encoding="utf-8"))
+            self.dataset = (m.get("artifacts") or {}).get("dataset_root") or self.dataset
+        except (OSError, ValueError):
+            pass
+
+    def _teleop_line(self, text: str) -> None:
+        m = SHA.search(text)
+        if m and getattr(self, "_sha", None) is None:
+            self._sha = m.group(1)          # kept for the whole run (Elephant GUI #9)
 
     def _recorder_line(self, text: str) -> None:
         m = RECORDING.search(text)
         if m:
-            self.episode = int(m.group(1) or m.group(2))
-            self.notes.setdefault(self.episode, {"grasp": False, "placed": False, "text": ""})
-            self._wall_at_start = self.monitor.status.wall_s if self.monitor else 0.0
-        d = DATASET.search(text)
-        if d and not self.dataset:
-            self.dataset = d.group(1) or d.group(2)
+            with self._lock:
+                self.episode = int(m.group(1) or m.group(2))
+                self.recording_now, self.episode_started = True, time.monotonic()
+                self.notes.setdefault(self.episode, {"grasp": False, "placed": False, "text": ""})
+                self._wall_at_start = self.monitor.status.wall_s if self.monitor else 0.0
+        elif WAITING.search(text):
+            self.recording_now = False
+        r = RUN_DIR.search(text)
+        if r:
+            self.run_dir = r.group(1)
 
     def _note(self, text: str) -> None:
         self.log.append(f"{dt.datetime.now():%H:%M:%S}  {text}")
+        self.n_log += 1
