@@ -117,7 +117,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [ ] Proposal: a command channel in the lerobot record loop instead of typed keys (Slack draft in §3, website part)
 - [ ] A two-arm remote receiver in lerobot (needed for both arms with the PICO)
 
-**Decision to make — owner: Suraj**
+**Decision to make — Kento san**
 - [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
 
 **Robot tests (supervised, separate spotter)**
