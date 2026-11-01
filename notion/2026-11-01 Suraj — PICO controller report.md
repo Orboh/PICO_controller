@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `82d3552`, not pushed) · Logs `log/log-025` … `log-035`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-035`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -92,15 +92,31 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - **Not used for now**: the video adds ~4 Mbit/s on the same Wi-Fi as the controller input. Not tested in the headset. Cannot run while lerobot-record uses the same camera (needs the camera splitter + sudo installs).
 
 ## 5. Next steps
-1. [x] Review of the wall code (Elephant + Goldfish) — done, fixes applied (§3, log-035)
-2. [x] Robot wall check on the left arm — PASS (wall check 2, log-034)
-3. [ ] Written OK in Slack for today's in-person approvals (joint_1 120°, right arm, wall behaviour)
-4. [ ] Wall check on the **right** arm; one deliberate slow reach into the stretched-arm wall
-5. [ ] Supervised robot check of 60 Hz + ease in/out (`HZ=60 ACC=300 bash scripts/gate4_sender.sh <tag>`), then a short PICO block to measure jerk
-6. [ ] Repeat R2 right wrist (roll right, pitch) using the pre-move (Enter)
-7. [ ] Rule for episodes recorded against a wall (time at a wall / hand slip), and match the sender log to the dataset frames
-8. [ ] PICO block × 5 (left) with the wall
-9. [ ] Kento-san: joint_7 leader offset (~89°) and a left start pose with more room for joint_2; then redo the leader block and compare leader vs. PICO
+**Done today**
+- [x] Review of the wall code (Elephant + Goldfish) — fixes applied (§3, log-035)
+- [x] Robot wall check on the left arm — PASS (wall check 2, log-034)
+
+**Permissions to get (written, Slack) — owner: Suraj → Kota-san**
+- [ ] joint_1 session drift limit 120° (in person 11-01)
+- [ ] Using the right arm with the PICO (in person 11-01)
+- [ ] The wall behaviour (arm holds at the edge instead of FAULT) on the robot (in person 11-01)
+
+**Requests to Kento-san — owner: Suraj**
+- [ ] joint_7 leader/follower start offset (~89°): needed for a fair leader vs. PICO comparison
+- [ ] Left start pose with more room for joint_2 (most common wall: 43 of 94)
+- [ ] Confirm the follower branch `feat/takeei-wood-l1` as the one to use
+
+**Decision to make — owner: Suraj**
+- [ ] Episode rule for demonstrations recorded against a wall: mark an episode when it spends more than **N s at a wall** or has more than **M cm of hand slip** (numbers to decide); the check then reads the sender log, matched to the dataset frames by time
+
+**Robot tests (supervised, separate spotter)**
+- [ ] Wall check on the **right** arm, incl. one slow reach into the stretched-arm wall
+- [ ] 60 Hz + ease in/out (`HZ=60 ACC=300 bash scripts/gate4_sender.sh <tag>`) + a short PICO block to measure jerk
+- [ ] Repeat R2 right wrist (roll right, pitch) using the pre-move (Enter)
+
+**Then data collection**
+- [ ] PICO block × 5 (left) with the wall
+- [ ] After Kento-san's joint_7 fix: redo the leader block, then compare leader vs. PICO
 
 ## 6. Where things are
 | What | Location |
