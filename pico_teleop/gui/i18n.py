@@ -80,7 +80,7 @@ TEXT: dict[str, tuple[str, str]] = {
     "s.ep": ("recording episode — End / Discard / wait", "録画中 — 終了 / 破棄 / 待つ"),
     "s.wait": ("▶ Next episode, or ■ End recording", "▶ 次のエピソード、または ■ 記録終了"),
     # checks
-    "chk.wifi": ("PC on the PICO Wi-Fi (orboh, 192.168.0.x)", "PC が PICO の Wi-Fi（orboh, 192.168.0.x）"),
+    "chk.wifi": ("PC on the same network as the headset (Wi-Fi orboh or Kota-san's tethering)", "PC がヘッドセットと同じネットワーク（Wi-Fi orboh か Kota さんのテザリング）"),
     "chk.service": ("PICO PC Service running", "PICO PC Service が動いている"),
     "chk.demo": ("PC Service 3D demo window closed", "PC Service の 3D デモ画面が閉じている"),
     "fix.demo": ("Close the 3D demo window (pgrep -af RobotLinuxDemo; kill it): it steals the PICO input.",
@@ -94,7 +94,8 @@ TEXT: dict[str, tuple[str, str]] = {
     "chk.can.can_fol_r": ("Follower arm (right) CAN up", "フォロワーアーム（右）CAN"),
     "chk.gng": ("Today's go/no-go all PASS", "今日の go/no-go が全部 PASS"),
     "chk.free": ("No other sender / recorder running", "ほかの送信 / 記録プログラムが動いていない"),
-    "fix.wifi": ("Connect the PC to Wi-Fi `orboh` (nmcli dev wifi connect orboh).", "PC を Wi-Fi `orboh` につなぐ（nmcli dev wifi connect orboh）。"),
+    "fix.wifi": ("Connect the PC and the headset to the same network: Wi-Fi `orboh` (nmcli dev wifi connect orboh) or Kota-san's phone tethering; with tethering start the page with PICO_HEADSET_IP=<headset ip>.",
+                 "PC とヘッドセットを同じネットワークへ: Wi-Fi `orboh`（nmcli dev wifi connect orboh）か Kota さんのスマホのテザリング。テザリングなら PICO_HEADSET_IP=<ヘッドセットのIP> でページを起動。"),
     "fix.service": ("Start the PICO PC Service (RoboticsServiceProcess), see the PICO working-setup page.", "PICO PC Service（RoboticsServiceProcess）を起動。PICO の動作セットアップのページ参照。"),
     "fix.headset": ("Headset on, awake, on Wi-Fi `orboh`; it sleeps ~8 s after being taken off.", "ヘッドセットを着けて起こす・Wi-Fi `orboh`。外すと約8秒で眠る。"),
     "fix.input": ("In the XRoboToolkit app: Status WORKING, Controller ticked, sending ON (A toggles it); close the 3D demo window.",

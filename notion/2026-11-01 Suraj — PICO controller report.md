@@ -8,9 +8,9 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 - **Fix: the "wall".** At the edge the arm now stops and holds, the hand slips, moving back works at once; no FAULT, no lock. **Verified on the robot (left arm): 94 wall contacts in 7 minutes, no lock.**
 - **PICO episodes were jerkier than leader episodes**, mainly because the sender (50 Hz) and the recorder (30 fps) run at different rates. Fix (60 Hz + ease in/out) **confirmed on the robot: jerk −45 %, now as smooth as the leader episodes.**
 - **Video (FPV) pipeline with an on/off button on the controller**: built, **not used** for now (Wi-Fi load).
-- **Collection website (new)**: one page for both methods (leader arm or PICO) instead of two terminals: connection checks with notifications, the dry → gate → session stages with the reviewer's OK (as in the Dream-Lab Collect tab), the runbook's order and refusals, live status, episode notes, English / 日本語. Built and reviewed (Elephant + Goldfish); **not yet used on the robot**. Guides: "Working setup for PICO" and "Collection website — setup and operation" (new pages).
+- **Collection website (new)**: one page for both methods (leader arm or PICO) instead of two terminals: connection checks with notifications, the dry → gate → session stages with the reviewer's OK (as in the Dream-Lab Collect tab), the runbook's order and refusals, live status, episode notes, English / 日本語. Built and checked; **not yet used on the robot**. Guides: "Working setup for PICO" and "Collection website — setup and operation" (new pages).
 - **Direction**: the PICO now moves the **follower** arm (tested); a new mode where the PICO moves the **leader** arm is planned.
-- Reviewed by Elephant + Goldfish at the end of the day; 4 code fixes applied (§3).
+- End-of-day check of the code: 4 fixes applied (§3).
 
 ## 1. Sessions today (all supervised; arm resting, power off at the end)
 | Session | Arm | Operator / spotter | What | Result | Log |
@@ -86,7 +86,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - With ease in/out a joint can end up to 0.5° inside the 3° guard (never closer than 2.5°).
 - **Robot (log-037):** PICO 60 Hz + 300°/s² episode: jerk 24.9 k (−45 %), step doubling 17 % (50 Hz: 61–63 %, leader: 12–17 %).
 
-### Review at the end of the day (Elephant + Goldfish, log-035)
+### Findings at the end of the day (log-035)
 | Problem found | Fix |
 | --- | --- |
 | An arm already very stretched could not move out (every move FAULTed → lock) | only a move that makes it straighter FAULTs |
@@ -102,7 +102,7 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 
 ## 5. Next steps
 **Done today**
-- [x] Review of the wall code (Elephant + Goldfish) — fixes applied (§3, log-035)
+- [x] Check of the wall code — fixes applied (§3, log-035)
 - [x] Robot wall check on the left arm — PASS (wall check 2, log-034)
 
 **Permissions to get (written, Slack) — owner: Suraj → Kota-san**
@@ -141,13 +141,14 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | 1 Setup | PICO → follower / leader arm → follower, arm, **stage** (dry 2 / gate 10 / session), episodes, operator name, task; PICO: smooth motion, wrist rotation, pre-move |
 | 2 Run | ① teleop → ② spotter name + "arm may move" → ③ recording → ▶ / ↺ / ⟲ / ■ End (not an e-stop) → ④; one recording per ①; refuses unsafe orders (R2, R4, LOCKED, wrong start pose, no reviewed gate) |
 | Live status, episodes, logs | sender state, boundary time, input rate, facing; grasp / placed / note per episode, saved at once |
-- Reviewed by Elephant (16 findings) and Goldfish (10); 3 blockers fixed (one recording per teleop start, crashed-sender status, go/no-go enforced).
+- Findings fixed: one recording per teleop start, a crashed sender's last status is not trusted, go/no-go enforced (and 23 smaller ones).
 - Start: `bash ~/projects/PICO-controller/scripts/gui.sh` → http://localhost:8090.
+- Before using it: the OpenArm safety pages — **OpenArm 安全プロトコル** https://app.notion.com/p/3fc194a1c56281a78de0d118bb2fb910 and **安全の決まり** https://app.notion.com/p/3fc194a1c56281e69f78c10b93fadc2a (stop levels, power switch, `can_check.sh`, never `openarm-can-cli monitor`); summary and PICO connection steps (Wi-Fi `orboh` or Kota-san's tethering, the XRoboToolkit app: PC Service address → Status WORKING → Controller → Send) in the guide pages.
 - **Headset-only check (log-041):** ① from the page worked (PICO ~53 Hz, correct start pose, HOLD, notes saved). ③ was pressed with the follower CAN link down: the recorder failed at once ("Network is down", the arm never moved) and then hung; it had to be stopped with Ctrl-C. Fixed: ② refuses the same person as operator and spotter; ③ refuses while the follower (or leader) CAN link is down; a red "RECORDER FAILED" banner and an "Abort recorder (Ctrl-C)" button (only when the recorder fails or does not end).
 - **Correction (log-042/043):** the 20:50 run had the left follower **powered and connected** (it moved to the start pose, 28 `a` presses), not "arm off"; it ended without a normal end.
 - **Recorder keys bug (log-042):** the page's ▶ / ■ did nothing because, with a desktop `DISPLAY`, lerobot reads → ← Esc from the PC's keyboard (any window), not from its terminal. Fixed with the existing key method: the recorder is started without `DISPLAY` (page and our scripts), the same as `collect_bimanual.sh` already does. Test with lerobot's real key reader.
 - **Both arms (log-043):** with the leader arms the page runs the team's `collect_bimanual.sh` (dry / gate / session, like the Collect tab); **both arms with the PICO is not possible yet** (lerobot's remote receiver is one-arm only → Kento).
-- **Review of log-040…042 (Elephant + Goldfish, log-043):** fixed — a short or failed gate can no longer be approved (review only with all episodes saved; a new gate cancels the OK); Abort only 60 s after End; check results expire and the Wi-Fi name is checked; scene required for gate/session; Japanese banners; the page shows "saved N of M episodes" and whether the recorder reads its keys from the page; guides updated (restart rule, power/CAN timing, recovery, data paths).
+- **Findings fixed (log-043):** a short or failed gate can no longer be approved (review only with all episodes saved; a new gate cancels the OK); Abort only 60 s after End; check results expire and the Wi-Fi name is checked; scene required for gate/session; Japanese banners; the page shows "saved N of M episodes" and whether the recorder reads its keys from the page; guides updated (restart rule, power/CAN timing, recovery, data paths).
 
 **Slack message to Kento-san (draft, to post in Slack):**
 

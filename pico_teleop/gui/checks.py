@@ -14,7 +14,6 @@ import re
 import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-PICO_NET = ipaddress.ip_network("192.168.0.0/24")      # Wi-Fi `orboh` (PC 192.168.0.136, headset 192.168.0.233 on 11-01)
 HEADSET_IP = os.environ.get("PICO_HEADSET_IP", "192.168.0.233")   # DHCP: set PICO_HEADSET_IP when it changes
 SERVICE_PORT = 60061                                   # PICO PC Service (XRoboToolkit RoboticsServiceProcess), local SDK port
 CAMERAS = {"chest": "344422070898", "left": "409122272149", "right": "352122273417"}   # librealsense serials
@@ -37,12 +36,15 @@ def _run(argv: list[str], timeout: float = 3.0) -> str:
 
 
 def wifi() -> Check:
+    """The PC is on the same network as the headset: Wi-Fi `orboh`, or Kota-san's phone tethering (log-044).
+    With tethering the addresses are not 192.168.0.x: start the page with PICO_HEADSET_IP=<headset ip>."""
     out = _run(["ip", "-4", "-br", "addr"])
     addrs = re.findall(r"(\d+\.\d+\.\d+\.\d+)/\d+", out)
-    on = [a for a in addrs if ipaddress.ip_address(a) in PICO_NET]
+    net = ipaddress.ip_network(f"{HEADSET_IP}/24", strict=False)
+    on = [a for a in addrs if ipaddress.ip_address(a) in net]
     ssid = _run(["iwgetid", "-r"]).strip()
-    ok = bool(on) and ssid in ("orboh", "")      # a known other network is a fail (Elephant 11-01 #3)
-    return Check("chk.wifi", ok, f"{', '.join(on) or 'no 192.168.0.x address'}" + (f" · SSID {ssid}" if ssid else " · SSID unknown"), "fix.wifi")
+    return Check("chk.wifi", bool(on), f"{', '.join(on) or f'no address in {net}'}" + (f" · SSID {ssid}" if ssid else " · SSID unknown")
+                 + f" · headset {HEADSET_IP}", "fix.wifi")
 
 
 def service() -> Check:

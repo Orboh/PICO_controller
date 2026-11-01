@@ -247,6 +247,10 @@ def test_checks_and_translations(tmp_path, monkeypatch):
     from pico_teleop.gui import checks, i18n
     monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "wlp0s20f3 UP 192.168.0.136/24\n" if argv[0] == "ip" else "orboh\n")
     assert checks.wifi().ok
+    monkeypatch.setattr(checks, "HEADSET_IP", "172.20.10.3")      # phone tethering: other network
+    assert not checks.wifi().ok
+    monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "wlp0s20f3 UP 172.20.10.2/28\n" if argv[0] == "ip" else "Kota-iPhone\n")
+    assert checks.wifi().ok
     monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "LISTEN 0 4096 [::ffff:127.0.0.1]:60061 *:*\n")
     assert checks.service().ok
     monkeypatch.setattr(checks, "_run", lambda argv, timeout=3.0: "rate ~8 Hz | L ok | R ok | facing 3 deg  (OK)")

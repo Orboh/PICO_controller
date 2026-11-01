@@ -1,5 +1,27 @@
 # Collection website: setup and operation (leader arm or PICO)
 
+## Safety first (read before touching the robot)
+Source pages (Notion, read them fully once):
+- **OpenArm 安全プロトコル（実機に触る前に必ず読む）** — https://app.notion.com/p/3fc194a1c56281a78de0d118bb2fb910
+- **安全の決まり（実機に触る前に必ず読む）** — https://app.notion.com/p/3fc194a1c56281e69f78c10b93fadc2a
+- This repo's daily checklist and spotter card: `docs/hardware-runbook.md` (go/no-go, rules R1–R4)
+
+In brief (from the safety protocol):
+| Level | How to stop | Effect / when |
+|---|---|---|
+| L0 prevent | speed / step limits, walls (this page), short episodes | limits how far a wrong motion can go |
+| L1 normal stop | **End recording** on the page / Ctrl-C of the program | the program stops; teleop disables the motors on the way out |
+| L1.5 soft e-stop | `touch /tmp/openarm_estop` (only programs that watch it, e.g. jev_arm.py; not the recorder) | hold → torque off → disconnect |
+| L2 soft limp | `openarm-can-cli disable` on each CAN channel; check with `bash scripts/can_check.sh` (openarm-orboh) | torque off (may not work after an error latch) |
+| L3 cut power | **the arm's DC power supply OFF → 10 s → ON** | the only sure way; the spotter keeps a hand near it |
+- Before: nobody, no PC, cable or camera mount inside the follower's reach; the power switch within reach and **pointed at**
+  (which switch = which arm); **never use `openarm-can-cli monitor`** (it switches torque ON) — use `show_param` or `can_check.sh`.
+- During: strange noise, odd following or sudden vibration → End recording / Ctrl-C at once → L2 → L3 if needed. A CAN
+  bus-off on one side → stop collecting (do not continue with one arm), tell Kento-san.
+- After (every time, especially after a crash): confirm the motors are disabled; **after a crash treat the motors as still
+  powered**; power-cycle anything that does not go limp; leave the arm hanging in a safe pose.
+- This page is **not** an emergency stop: the spotter's e-stop / power switch is.
+
 ## Setup (once per PC)
 ```bash
 cd ~/projects/PICO-controller
@@ -21,6 +43,21 @@ English / 日本語: the button at the top right. Only one browser tab controls;
 Check in the recorder status line: **"keys from this page ✅"** (lerobot says "No display detected: reading recording
 control keys from stdin"). If it says "keys NOT from this page", end the recording and restart the page.
 
+## Connect the PICO (every day, before ①)
+1. **Network — PC and headset on the same network**, one of:
+   - Wi-Fi **`orboh`** (`nmcli dev wifi connect orboh` on the PC; on the headset: Settings → Wi-Fi → `orboh`), or
+   - **Kota-san's mobile tethering (hotspot)**: PC and headset both join the phone's hotspot. Addresses are then not
+     192.168.0.x: start the page with `PICO_HEADSET_IP=<headset ip> bash scripts/gui.sh` so the checks ping the right one.
+   PC address: `ip -4 -br addr show wlp0s20f3` (the Wi-Fi interface; ignore docker / VPN addresses).
+2. **PC Service** running on the PC (card 0 shows it; start command in "Working setup for PICO").
+3. **In the headset, open the XRoboToolkit app** (Library → Unknown sources → XRoboToolkit) and check its panel, part by part:
+   - **PC Service:** type the PC's address from step 1 → connect; wait until **Status: WORKING**.
+   - **Data to send:** tick **Controller** (and **Headset**: the page uses it for the facing check).
+   - Press **Send** so the app starts sending. **Do not press A afterwards** (A toggles sending off).
+   - Close the PC Service's 3D demo window on the PC if it opened.
+4. On the page press **Test PICO input**: `rate ~50–80 Hz | L ok | R ok | facing …`. 0 Hz → sending is off, the headset
+   slept (keep it on), or the 3D demo is open.
+
 ## People
 | Role | Does |
 |---|---|
@@ -30,7 +67,7 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
 
 ## The page, top to bottom
 - **Card 0 — Before you start: connections** (refreshed every 3 s, a toast when one is lost or back):
-   PICO: PC on Wi-Fi `orboh`, PC Service running, 3D demo closed, headset answers, PICO data (button "Test PICO input");
+   PICO: PC on the headset's network (orboh or tethering), PC Service running, 3D demo closed, headset answers, PICO data (button "Test PICO input");
    leader: leader arm CAN up; both: follower CAN up, cameras (button), today's go/no-go all PASS, no other sender.
    Red items show what to do. Fix them before ①.
 - **Card 1 — Setup**: method (PICO → follower / Leader arm → follower), arm (**left / right / both**), **stage**, episodes,
