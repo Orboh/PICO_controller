@@ -86,3 +86,30 @@ def test_wall_state_is_logged_for_episode_filtering():
     for i in range(1, 500):
         arm.step(ADAPT(_c((0, 1, 0), -min(0.1 * i, 40.0)), True))
     assert arm.n_wall_cycles > 0 and arm.slip_m >= 0.0 and arm.slip_deg > 0.0
+
+
+def test_ik_jump_holds_instead_of_locking():
+    """log-030b: the pilot replay locked on 'IK jumped' twice near a stretched arm. Now it holds."""
+    arm = _arm(orientation=False, max_ik_jump_deg=0.001)   # every step counts as a jump
+    q0 = arm.q.copy()
+    events = [arm.step(ADAPT(_c(delta=(0.0005 * i, 0.0, 0.0)), True)).event for i in range(1, 100)]
+    assert arm.state == ENGAGED and not arm.locked
+    assert any(e and "joints would jump" in e for e in events)
+    assert np.allclose(arm.q, q0)                          # the jump is never sent
+
+
+def test_acceleration_limit_eases_in_without_overshoot_and_stops_on_release():
+    """log-032: with max_joint_acc_dps2 the joint speed ramps up/down; release still stops at once."""
+    import math
+    arm = _arm(orientation=False, hz=60.0, max_joint_acc_dps2=300.0)
+    speeds = []
+    for i in range(1, 120):
+        q0 = arm.q.copy()
+        arm.step(ADAPT(_c(delta=(0.002 * i, 0.0, 0.0)), True))
+        speeds.append(np.rad2deg(np.abs(arm.q - q0)).max() * 60.0)
+    acc = np.abs(np.diff(speeds)) * 60.0
+    assert max(speeds) <= 45.0 + 1e-6 and acc.max() <= 300.0 + 1.0
+    arm.step(ADAPT(_c(grip=0.0), True))
+    q_rel = arm.q.copy()
+    arm.step(ADAPT(_c(grip=0.0), True))
+    assert np.allclose(arm.q, q_rel) and not np.any(arm.qd)   # HOLD: no drift after release

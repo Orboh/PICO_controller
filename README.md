@@ -26,14 +26,15 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
 ## Plan in progress (2026-11-01, wall fix log-030)
 1. [x] Offline: finish the replays old vs new (today's locked runs + session 4 + pilot redo): no edge locks, no creep
-2. [ ] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
+2. [x] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
 3. [x] log-030 + commit (deferred: limit avoidance in wrist mode; not possible: headset wall signal / vibration)
 4. [ ] Short Elephant + Goldfish review of the finished wall code
 5. [ ] Arm (supervised, one arm): push slowly into each edge once (joint limit, stretched arm, 60° posture): arm holds, `WALL`, back works, no FAULT/LOCK
 6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
 7. [ ] PICO block × 5 (left) with the wall; wall time per episode from the log
 8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
-Side task: PICO video (FPV) with an on/off button on the controller (log-031).
+Side task: PICO video (FPV) with an on/off button on the controller (log-031): built, not used (Wi-Fi load).
+Jerk (log-032): try `HZ=60 ACC=300` on the arm together with step 5 (offline: jerk −44..66 %).
 
 ## To do after the PICO data collection
 - [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set

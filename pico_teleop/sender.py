@@ -307,6 +307,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="wrist rotation: the hand's rotation since engage also turns the gripper (log-015)")
     ap.add_argument("--hz", type=float, default=50.0)
     ap.add_argument("--scale", type=float, default=0.5)
+    ap.add_argument("--max-joint-acc-dps2", type=float, default=None,
+                    help="log-032: ease joints in/out (e.g. 300) instead of the hard speed cut; use with --hz 60 "
+                         "when recording at 30 fps (offline: jerk -45..66%%). Default off")
     ap.add_argument("--port-offset", type=int, default=0, help="tests only: shift 5701/5711 etc.")
     ap.add_argument("--link-timeout-s", type=float, default=1.0)
     ap.add_argument("--stale-s", type=float, default=0.4,
@@ -349,7 +352,7 @@ def main(argv=None) -> int:
         return 2
     pose_set = a.pose_set or current_pose_set(a.pose_sets_dir)
     sides = ["left", "right"] if a.arms == "both" else [a.arms]
-    cfg = TeleopConfig(hz=a.hz, scale=a.scale, orientation=a.orientation)
+    cfg = TeleopConfig(hz=a.hz, scale=a.scale, orientation=a.orientation, max_joint_acc_dps2=a.max_joint_acc_dps2)
     chans = []
     for s in sides:
         link = None if a.dry_run else Link(a.host, PORTS[s] + a.port_offset, ECHO_PORTS[s] + a.port_offset)

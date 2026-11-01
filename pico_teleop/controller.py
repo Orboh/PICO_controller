@@ -50,6 +50,8 @@ class TeleopConfig:
     gripper_closed_deg: float = 0.0    # trigger fully pulled
     max_tcp_speed_mps: float = 0.25    # TCP target rate limit
     max_joint_speed_dps: float = 45.0  # joint rate limit applied before validation (validator: 60)
+    max_joint_acc_dps2: float | None = None  # log-032 experiment: ease in/out at the speed limit (None = off,
+                                       # hard cut as before); only while ENGAGED, FAULT/release still stop at once
     max_gripper_speed_dps: float = 120.0
     gripper_sync_dps: float = 30.0     # "gentle sync": speed toward the trigger until they match
                                        # (log-012; was: no motion until a near-full trigger pull)
@@ -160,6 +162,7 @@ class ArmTeleop:
         self.grip_synced = False
         self.q_session = self.q.copy()     # start pose of this sender session (drift limit)
         self.n_steps = 0                   # step() calls; x dt = session time for the FAULT window
+        self.qd = np.zeros_like(self.q)    # joint velocity (rad/s) for the optional acceleration limit
         self.fault_times: dict[str, list[float]] = {}
         self.any_fault_times: list[float] = []
         self.refused_this_squeeze = False  # print "engage refused" once per squeeze, not every cycle
@@ -251,6 +254,7 @@ class ArmTeleop:
     def _fault(self, why: str) -> StepOut:
         self.state = FAULT
         self.q_ik = self.q.copy()
+        self.qd = np.zeros_like(self.q)
         # kind of FAULT: message head with numbers and joint indices removed ("IK jumped 5.6 deg" and
         # "IK jumped 6.5 deg" are the same kind; so are "joint_1 would ..." and "joint_7 would ...")
         key = re.sub(r"[-+]?\d+(\.\d+)?", "N", re.sub(r"joint_\d", "joint_N", why.split("(")[0]))
@@ -308,6 +312,8 @@ class ArmTeleop:
     def step(self, h: HandInput) -> StepOut:
         cfg = self.cfg
         self.n_steps += 1
+        if self.state != ENGAGED:
+            self.qd = np.zeros_like(self.q)   # acceleration limit only while following (HOLD/FAULT stop at once)
         released = h.valid and h.clutch < cfg.clutch_off   # only a VALID sample can count as a release
         if released:
             self.armed = True
@@ -438,13 +444,17 @@ class ArmTeleop:
             else:
                 res = self.kin.solve_position(p_tgt, self.q_ik, tol_m=cfg.ik_solve_tol_m, max_iter=cfg.ik_max_iter,
                                              limit_band_deg=cfg.limit_band_deg, null_gain=cfg.null_gain)
-            if res.sigma_min < cfg.min_sigma_hard:
+            blocked = self._edge(res)   # going deeper into a stretched pose is a WALL first (log-030c)
+            if blocked is None and res.sigma_min < cfg.min_sigma_hard:
+                # hard floor (Goldfish): an ACCEPTED answer may never be this stretched
                 return self._fault(f"near singular (sigma {res.sigma_min:.3f} < {cfg.min_sigma_hard})")
-            blocked = self._edge(res)
             if blocked is None:
                 jump = float(np.max(np.abs(np.rad2deg(res.q - self.q_ik))))
                 if jump > cfg.max_ik_jump_deg:
-                    return self._fault(f"IK jumped {jump:.1f} deg in one cycle (> {cfg.max_ik_jump_deg})")
+                    # log-030b: near a stretched arm a small hand step can ask for a big joint step. Holding
+                    # (wall) is as safe as the old FAULT (the jump is never sent) but does not lock the session.
+                    blocked = f"joints would jump {jump:.0f} deg (arm near stretched)"
+            if blocked is None:
                 self.p_target, self.q_ik, err, sigma = p_tgt, res.q, res.err_m, res.sigma_min
                 if R_tgt is not None:
                     self.R_target = R_tgt
@@ -453,8 +463,17 @@ class ArmTeleop:
         t_now = self.n_steps * self.dt
         if self.wall is not None and t_now - self.wall_last_t > cfg.wall_quiet_s:
             self.wall = None
-        qlim = math.radians(cfg.max_joint_speed_dps) * self.dt
-        self.q = self.kin.clamp(self.q + np.clip(self.q_ik - self.q, -qlim, qlim))
+        if cfg.max_joint_acc_dps2:
+            # trapezoidal tracking: speed <= max, change of speed <= acc*dt, brake in time (no overshoot)
+            vmax, amax = math.radians(cfg.max_joint_speed_dps), math.radians(cfg.max_joint_acc_dps2)
+            e = self.q_ik - self.q
+            v_des = np.clip(e / self.dt, -vmax, vmax)
+            v_des = np.sign(v_des) * np.minimum(np.abs(v_des), np.sqrt(2.0 * amax * np.abs(e)))
+            self.qd = self.qd + np.clip(v_des - self.qd, -amax * self.dt, amax * self.dt)
+            self.q = self.kin.clamp(self.q + self.qd * self.dt)
+        else:
+            qlim = math.radians(cfg.max_joint_speed_dps) * self.dt
+            self.q = self.kin.clamp(self.q + np.clip(self.q_ik - self.q, -qlim, qlim))
 
         g_des = cfg.gripper_open_deg + h.gripper * (cfg.gripper_closed_deg - cfg.gripper_open_deg)
         # Gentle sync: after each engage the gripper moves toward the trigger's mapped angle at only
