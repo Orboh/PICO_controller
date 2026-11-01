@@ -1,6 +1,6 @@
 # 2026-11-01 Suraj — PICO controller: robot pilot, wrist and right arm, the wall fix, video pipeline
 
-Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v12-pilot-pico-redo-log`, latest `a111132`, not pushed) · Logs `log/log-025` … `log-037`
+Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/projects/PICO-controller` (local git, branch `v13-collection-gui`, latest `0fa28e8`, not pushed) · Logs `log/log-025` … `log-040`
 
 ## Summary
 - **PICO teleop on the real robot, both arms.** Left arm: data-collection block with the new joint_1 limit, wrist roll/pitch/yaw. Right arm: first ever PICO session (position: all directions right; roll left).
@@ -8,6 +8,8 @@ Work date: 2026-11-01 · Author: Suraj (written with Claude Code) · Repo `~/pro
 - **Fix: the "wall".** At the edge the arm now stops and holds, the hand slips, moving back works at once; no FAULT, no lock. **Verified on the robot (left arm): 94 wall contacts in 7 minutes, no lock.**
 - **PICO episodes were jerkier than leader episodes**, mainly because the sender (50 Hz) and the recorder (30 fps) run at different rates. Fix (60 Hz + ease in/out) **confirmed on the robot: jerk −45 %, now as smooth as the leader episodes.**
 - **Video (FPV) pipeline with an on/off button on the controller**: built, **not used** for now (Wi-Fi load).
+- **Collection website (new)**: one page for both methods (leader arm or PICO) instead of two terminals: connection checks with notifications, the dry → gate → session stages with the reviewer's OK (as in the Dream-Lab Collect tab), the runbook's order and refusals, live status, episode notes, English / 日本語. Built and reviewed (Elephant + Goldfish); **not yet used on the robot**. Guides: "Working setup for PICO" and "Collection website — setup and operation" (new pages).
+- **Direction**: the PICO now moves the **follower** arm (tested); a new mode where the PICO moves the **leader** arm is planned.
 - Reviewed by Elephant + Goldfish at the end of the day; 4 code fixes applied (§3).
 
 ## 1. Sessions today (all supervised; arm resting, power off at the end)
@@ -38,6 +40,7 @@ Approvals today: Kota-san in person (joint_1 120° limit; right arm; the wall be
 | Pre-move: Enter moves the arm 10 cm forward slowly | tests | ❌ not used yet |
 | 60 Hz + ease in/out (jerk) | ✅ −44…66 % jerk | ✅ −45 %, step wobble at leader level (log-037) |
 | Video on/off from the controller | tests | ❌ not used (decision) |
+| Collection website (both methods, checks, stages, EN/JA) | ✅ 138 tests, browser check, live connection checks green | ❌ not used with the arm yet |
 
 The limit numbers measured on the robot are the values **sent** to the arm (no feedback from the arm yet); that the arm held at each wall was judged by the spotter.
 
@@ -120,9 +123,23 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 - [x] 60 Hz + ease in/out — robot: jerk −45 %, as smooth as the leader (log-037); use `HZ=60 ACC=300` for PICO recording
 - [ ] Repeat R2 right wrist (roll right, pitch) using the pre-move (Enter)
 
+**Website (before the robot)**
+- [ ] Headset-only check of the website (arm off): connections, ① with PICO, live status; stop at ②
+- [ ] Supervised session with the website: dry with both methods, then gate + reviewer OK
+
 **Then data collection**
 - [ ] PICO block × 5 (left) with the wall and `HZ=60 ACC=300` (add `WRIST_MODE=1` if the wrist should turn)
 - [ ] After Kento-san's joint_7 fix: redo the leader block, then compare leader vs. PICO
+
+### Collection website (log-038 … log-040)
+| Part | What it does |
+| --- | --- |
+| 0 Before you start | PICO: PC on Wi-Fi `orboh`, PC Service, 3D demo closed, headset answers, PICO input test; leader arm CAN; follower CAN; cameras; today's go/no-go; no other sender. Red items say how to fix; a toast when a connection is lost or back |
+| 1 Setup | PICO → follower / leader arm → follower, arm, **stage** (dry 2 / gate 10 / session), episodes, operator name, task; PICO: smooth motion, wrist rotation, pre-move |
+| 2 Run | ① teleop → ② spotter name + "arm may move" → ③ recording → ▶ / ↺ / ⟲ / ■ End (not an e-stop) → ④; one recording per ①; refuses unsafe orders (R2, R4, LOCKED, wrong start pose, no reviewed gate) |
+| Live status, episodes, logs | sender state, boundary time, input rate, facing; grasp / placed / note per episode, saved at once |
+- Reviewed by Elephant (16 findings) and Goldfish (10); 3 blockers fixed (one recording per teleop start, crashed-sender status, go/no-go enforced).
+- Start: `bash ~/projects/PICO-controller/scripts/gui.sh` → http://localhost:8090.
 
 ## 6. Where things are
 | What | Location |
@@ -130,8 +147,9 @@ Replays of real sessions, old code vs. final code (same recorded hand motion, no
 | Code | `~/projects/PICO-controller/pico_teleop/` (wall: `controller.py` `_edge`, `_hit_wall`, `_note_wall`; pre-move and video: `sender.py`, `video.py`) |
 | Scripts | `scripts/arm_session.sh left/right position/wrist` (`PREMOVE_CM=10`, `VIDEO=/dev/video4`), `scripts/gate4_sender.sh` (`HZ`, `ACC`), `scripts/video_check.sh`, `scripts/wrist_dry_run.sh` |
 | Offline tools | `tools/` (fastreplay, jerkbench, wristcheck, rotspeed, wristsim, frames.sh) |
-| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test); index `log/log.md` |
+| Logs | `log/log-025` (pilot) … `log-035` (review), `log-036` (right-arm wall check), `log-037` (smoothing test), `log-038`…`log-040` (website); index `log/log.md` |
 | Run records | `runs/pilot-pico-3-*`, `runs/wrist-left-20261101-*`, `runs/position-right-20261101-181616-*`, `runs/wrist-right-20261101-182038-*` |
 | Datasets (local only) | `~/.cache/huggingface/lerobot/Orboh/openarm_pilot_pico_tmp_20261101_170706` |
 | Safety runbook | `docs/hardware-runbook.md` (spotter card incl. walls and the pre-move) |
 | Plan | README "Plan in progress" |
+| Website | `pico_teleop/gui/` (`session.py`, `app.py`, `checks.py`, `i18n.py`), `scripts/gui.sh`, guides `docs/collection-website.md`, `docs/pico-working-setup.md` |
