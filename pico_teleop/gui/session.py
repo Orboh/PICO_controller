@@ -38,8 +38,12 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\r")
 RECORDING = re.compile(r"Recording episode (\d+)|録画中 episode (\d+)")   # an episode starts (fork's banner, 2026-10)
 WAITING = re.compile(r"Waiting:|Escape key pressed")                       # an episode ended (lerobot fork log line)
 RUN_DIR = re.compile(r"\[record(?:-bi)?\] 記録: (\S+)")                    # printed at the end (single arm / bimanual)
-SHA = re.compile(r"sha256 ([0-9a-f]{12})")
-EXPECTED_SHA = {"left": "2ec31fb82bf0", "right": "a3b97b8e9d66"}
+SHA = re.compile(r"(?:\[sender\] (left|right):.*)?sha256 ([0-9a-f]{12})")   # the sender's start-pose line, per arm
+LEROBOT = pathlib.Path("~/projects/lerobot").expanduser()
+# Wall-episode rule (Kento 2026-11-03): PROVISIONAL values, only to flag PICO episodes for review (never discarded
+# automatically). The final values come from the per-episode distribution after the new start pose (tools/wall_report.py).
+WALL_REVIEW_S = 3.0
+SLIP_REVIEW_CM = 20.0
 OTHER_SENDERS = ("pico_teleop.sender", "leader_agent", "run_leader_agent", "lerobot-record", "lerobot-teleoperate")
 OPERATOR_NAME = re.compile(r"[A-Za-z][A-Za-z0-9 ._-]*")   # latin letters: it goes into the dataset manifest as typed
 EMERGENCY = " — in an emergency: the e-stop, not this page."
@@ -66,6 +70,16 @@ class Options:
     premove_cm: float = 0.0    # PICO: Enter moves the arm forward (log-028)
     tag: str = ""              # both arms, session only: collect_bimanual.sh tag suffix (e.g. s2)
     scene: str = "none"        # one arm, gate/session: an openarm-orboh scenes/<name>.yaml (dry: none)
+    pose_set: str = ""         # start-pose set for EVERY child (sender, leader agent, recorder); "" = CURRENT at ①
+
+
+def env_slug(path: pathlib.Path = BIMANUAL_ENV) -> str:
+    """TASK_SLUG of the both-arms task file (it goes into the dataset name)."""
+    try:
+        m = re.search(r"^TASK_SLUG=([a-z0-9_]+)", path.read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else "task"
+    except OSError:
+        return "task"
 
 
 def env_task(path: pathlib.Path = BIMANUAL_ENV) -> str:
@@ -82,6 +96,58 @@ def bimanual_leader(o: Options) -> bool:
     return o.method == "leader" and o.side == "both"
 
 
+def bimanual(o: Options) -> bool:
+    """Both arms, either method: collect_bimanual.sh records (the PICO over bi_openarm_leader_remote, log-047)."""
+    return o.side == "both"
+
+
+def resolve_pose_set(name: str = "", root: pathlib.Path | None = None) -> str:
+    """The set named on the page, else openarm-orboh's CURRENT (read once at ① and then pinned for every child)."""
+    if name.strip():
+        return name.strip()
+    try:
+        return ((root or ORBOH / "config" / "pose_sets") / "CURRENT").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def pose_sha(side: str, pose_set: str, root: pathlib.Path | None = None) -> str | None:
+    """sha256[:12] of <set>/<side>.yaml: what the follower aligns to; the sender must print the same."""
+    import hashlib
+    try:
+        return hashlib.sha256(((root or ORBOH / "config" / "pose_sets") / pose_set / f"{side}.yaml").read_bytes()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+def checkout(path: pathlib.Path) -> dict:
+    """Branch, commit and uncommitted-change count of a git checkout (Kento 11-03: in the notes of every session)."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=5,
+                              check=True).stdout.strip()
+    try:
+        return {"path": str(path), "branch": git("rev-parse", "--abbrev-ref", "HEAD"), "commit": git("rev-parse", "HEAD")[:12],
+                "uncommitted": len([l for l in git("status", "--porcelain").splitlines() if l.strip()])}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"path": str(path), "error": type(e).__name__}
+
+
+def checkouts() -> dict:
+    return {"openarm-orboh": checkout(ORBOH), "lerobot": checkout(LEROBOT), "PICO_controller": checkout(REPO)}
+
+
+def review_reason(method: str, wall_s: float, slip_cm: float | None) -> str:
+    """Why a PICO episode needs a look before training ("" = no flag). Leader episodes cannot slip."""
+    if method != "pico":
+        return ""
+    why = []
+    if wall_s > WALL_REVIEW_S:
+        why.append(f"{wall_s:.1f} s at a wall > {WALL_REVIEW_S:g} s")
+    if slip_cm is not None and slip_cm > SLIP_REVIEW_CM:
+        why.append(f"hand slip {slip_cm:.0f} cm > {SLIP_REVIEW_CM:g} cm")
+    return "; ".join(why)
+
+
 def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO) -> list[str]:
     """The teleop child: the PICO sender (with its JSONL log) or the leader agent. Both arms with the leader: a
     placeholder that only waits (the recorder connects both leader arms itself, like the Collect tab)."""
@@ -94,6 +160,8 @@ def teleop_command(o: Options, log_path: pathlib.Path, repo: pathlib.Path = REPO
     # restarted follower never gets this sender's held pose (R2, Elephant GUI #1)
     argv = ["bash", str(repo / "scripts" / "pico_env.sh"), "python", "-u", "-m", "pico_teleop.sender", "--host", "127.0.0.1",
             "--arms", o.side, "--confirm-follower-at-start-pose", "--max-link-pause-s", "30", "--log", str(log_path)]
+    if o.pose_set:
+        argv += ["--pose-set", o.pose_set]
     if o.smooth:
         argv += ["--hz", "60", "--max-joint-acc-dps2", "300"]
     if o.wrist:
@@ -112,22 +180,32 @@ def repo_id(o: Options) -> str:
 
 
 def recorder_command(o: Options, repo: pathlib.Path = REPO) -> tuple[list[str], dict[str, str]]:
-    """The recorder child: `pilot_record.sh` (one arm, both methods) or, for both arms with the leader arms,
-    openarm-orboh `collect_bimanual.sh <dry|gate|session> [tag] [n]` exactly as the Collect tab runs it."""
-    if bimanual_leader(o):
+    """The recorder child: `pilot_record.sh` (one arm, both methods) or, for both arms, openarm-orboh
+    `collect_bimanual.sh <dry|gate|session> [tag] [n]` as the Collect tab runs it (PICO: REMOTE=true, log-047).
+    POSE_SET is passed to every recorder so the leader and the PICO start from the same set (Kento 11-01)."""
+    if bimanual(o):
         argv = ["bash", str(ORBOH / "scripts" / "collect_bimanual.sh"), o.stage]
         if o.stage == "session":
             argv.append(o.tag.strip())
         argv.append(str(int(o.episodes)))
-        env = {"ENV_FILE": str(BIMANUAL_ENV), "OPERATOR": o.operator.strip(),
+        env = {"ENV_FILE": str(BIMANUAL_ENV), "OPERATOR": o.operator.strip(), "POSE_SET": o.pose_set or None,
                # like the Collect tab: no EPISODE_TIME_S unless set (0 = the task file's value, 120 s for sorting)
                "EPISODE_TIME_S": str(int(o.episode_time_s)) if o.episode_time_s > 0 else None,
-               "PLAY_SOUNDS": "true", "BILATERAL_FEEDBACK": "true", "SAVE_ON_EPISODE_END": "true",
-               "RETURN_ON_EPISODE_END": "true", "START_POSE_HOLD": "true", "START_COUNTDOWN_S": "3",
-               "L_BILATERAL_GRIPPER_KP": "1.25", "L_BILATERAL_GRIPPER_KD": "0.06",   # the Collect tab's runbook values
+               "PLAY_SOUNDS": "true", "SAVE_ON_EPISODE_END": "true",
+               "RETURN_ON_EPISODE_END": "true", "START_COUNTDOWN_S": "3",
                "DISPLAY": None, "WAYLAND_DISPLAY": None}
+        if o.method == "leader":
+            env.update({"BILATERAL_FEEDBACK": "true", "START_POSE_HOLD": "true",
+                        "L_BILATERAL_GRIPPER_KP": "1.25", "L_BILATERAL_GRIPPER_KD": "0.06"})   # the Collect tab's runbook values
+        else:
+            # PICO: bi_openarm_leader_remote (lerobot feat/bi-openarm-leader-remote) + the openarm-orboh REMOTE change.
+            # No start-pose hold: while held, lerobot does not read the teleop, the receiver sends no echoes and the
+            # sender stops after its link pause. The dataset name says "pico" so it never mixes with leader data.
+            env.update({"REMOTE": "true", "START_POSE_HOLD": "false", "BILATERAL_FEEDBACK": "false"})
+            if o.stage != "dry":                  # dry: collect_bimanual.sh names a throw-away _test_ dataset itself
+                env["REPO_ID"] = f"Orboh/bi_openarm_{env_slug()}_chest_wristr_pico_v1"
         return argv, env
-    env = {"SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip(),
+    env = {"POSE_SET": o.pose_set or None, "SIDE": o.side, "EPISODE_TIME_S": str(int(o.episode_time_s)), "TASK": o.task, "OPERATOR": o.operator.strip(),
            "REPO_ID": repo_id(o), "SCENE": "none" if o.stage == "dry" else o.scene.strip(),
            "TAG": f"{o.method}-{o.side}-{o.stage}",                 # run folder ~/collections/<UTC>-<tag> (Elephant 11-01 #6)
            # log-042: with a desktop DISPLAY lerobot reads → ← Esc from the GLOBAL keyboard (pynput), not from its
@@ -219,7 +297,9 @@ class ArmStatus:
     foreign: bool = False
     last_event: str = ""
     wall_s: float = 0.0
+    slip_m: float | None = None   # cumulative hand slip (all arms); None = an old sender without the field
     t: float = 0.0
+    t_abs: float = 0.0          # the sender's own clock (its JSONL "t"), to find the episode in the log later
     read_at: float = 0.0        # time.monotonic() when the latest cycle was read
 
 
@@ -228,6 +308,7 @@ class SenderMonitor:
 
     def __init__(self, path: pathlib.Path, side: str, facing: Callable[[list], float | None] | None = None):
         self.path, self.side, self.facing = path, side, facing
+        self.sides = ["left", "right"] if side == "both" else [side]
         self.status = ArmStatus()
         self.events: deque[tuple[float, str]] = deque(maxlen=200)
         self.n_events = 0
@@ -270,12 +351,24 @@ class SenderMonitor:
     def _cycle(self, d: dict) -> None:
         t = float(d["t"])
         self._t0 = self._t0 if self._t0 is not None else t
-        a = (d.get("arms") or {}).get(self.side) or {}
+        arms = d.get("arms") or {}
+        per = [(sd, arms.get(sd) or {}) for sd in self.sides]
         s = self.status
-        s.t, s.state, s.link, s.wall = t - self._t0, a.get("state", "—"), a.get("link") or "—", a.get("wall")
+        s.t, s.t_abs = t - self._t0, t
+        if len(per) == 1:
+            a = per[0][1]
+            s.state, s.link, s.wall = a.get("state", "—"), a.get("link") or "—", a.get("wall")
+        else:   # both arms: ENGAGED if either is (R4), else the worse state; walls and slip add up
+            states = [a.get("state", "—") for _, a in per]
+            s.state = next((x for x in ("ENGAGED", "FAULT", "STOPPED", "HOLD") if x in states), states[0])
+            links = [a.get("link") or "—" for _, a in per]
+            s.link = links[0] if len(set(links)) == 1 else " / ".join(f"{sd[0].upper()} {l}" for (sd, _), l in zip(per, links))
+            s.wall = "; ".join(f"{sd}: {a['wall']}" for sd, a in per if a.get("wall")) or None
         if s.wall:
             self.wall_cycles += 1
         s.wall_s = self.wall_cycles / self.hz
+        slips = [a.get("slip_m") for _, a in per]
+        s.slip_m = None if any(x is None for x in slips) else float(sum(slips))
         fr = d.get("frame") or {}
         ts = int(fr.get("t_device_ns") or 0)
         if ts and (not self._dev_ts or self._dev_ts[-1][1] != ts):
@@ -285,7 +378,7 @@ class SenderMonitor:
         s.input_hz = float(len(self._dev_ts))
         if self.facing and fr.get("headset"):
             s.facing_deg = self.facing(fr["headset"])
-        ev = a.get("event")
+        ev = " | ".join((f"[{sd}] " if len(per) > 1 else "") + a["event"] for sd, a in per if a.get("event"))
         if ev:
             s.last_event = ev
             if "ANOTHER SENDER" in ev:
@@ -374,10 +467,14 @@ class CollectionSession:
     def __init__(self, runs_dir: pathlib.Path = REPO / "runs", spawn: Callable[..., PtyChild] = PtyChild,
                  probe: Callable[[], list[str]] = other_senders, facing: Callable[[list], float | None] | None = None,
                  gng: Callable[[str], tuple[bool, str]] | None = None, reviews: pathlib.Path | None = None,
-                 links: Callable[[str, str], list[str]] | None = None):
+                 links: Callable[[str, str], list[str]] | None = None,
+                 expected_sha: Callable[[str, str], str | None] | None = None,
+                 pose_sets: Callable[[str], str] | None = None, versions: Callable[[], dict] | None = None):
         self.runs_dir, self.spawn, self.probe, self.facing = runs_dir, spawn, probe, facing
         self.gng = gng or (lambda side: go_no_go_today(side=side))
         self.links = links or links_down        # CAN links that must be up before ③ (log-041)
+        self.pose_sets = pose_sets or resolve_pose_set
+        self.versions = versions or checkouts
         self.recorder_error = ""                 # the recorder printed a Python error before any episode
         self.keys_from_page: bool | None = None  # lerobot said it reads keys from its terminal (log-042 check)
         self.saved_episodes: int | None = None   # from the run folder's manifest after the recorder exits
@@ -399,10 +496,16 @@ class CollectionSession:
         self.run_dir: str | None = None
         self.dataset: str | None = None
         self.episode_walls: dict[int, float] = {}
+        self.episode_slip: dict[int, float | None] = {}     # cm of hand slip per episode (PICO; log-047)
+        self.episode_t: dict[int, list[float]] = {}         # sender clock [start, end] per episode (for the log)
         self.notes: dict[int, dict] = {}
+        self.checkouts: dict = {}                            # branches + commits at ① (Kento 11-03)
+        self.expected_sha = expected_sha or (lambda side, ps: pose_sha(side, ps))
+        self._shas: dict[str, str] = {}
         self.alarm = ""                      # a child died while it mattered (shown as a red banner)
         self.controller: str | None = None   # the one browser client allowed to press buttons
         self._wall_at_start = 0.0
+        self._slip_at_start: float | None = None
         self._lock = threading.Lock()
         self._teleop_was_alive = self._recorder_was_alive = False
         self.log: deque[str] = deque(maxlen=300)
@@ -429,9 +532,23 @@ class CollectionSession:
     def locked(self) -> bool:
         return self.monitor is not None and self.monitor.status.locked
 
+    def arm_sides(self) -> list[str]:
+        return ["left", "right"] if self.opts.side == "both" else [self.opts.side]
+
+    def expected(self) -> dict[str, str | None]:
+        """What the follower will align to: the pinned set's file per arm (was a hard-coded takeei-v2 sha)."""
+        return {sd: self.expected_sha(sd, self.opts.pose_set) for sd in self.arm_sides()}
+
     def sha_line(self) -> tuple[str | None, bool]:
-        sha = getattr(self, "_sha", None)
-        return sha, sha == EXPECTED_SHA[self.opts.side]
+        """(the sender's start-pose sha per arm as printed, all arms match the pinned set)."""
+        shas = getattr(self, "_shas", {})
+        if not shas:
+            return None, False
+        exp = self.expected()
+        text = " / ".join(f"{sd[0].upper()} {shas.get(sd, '…')}" for sd in self.arm_sides()) if len(exp) > 1 else \
+            shas.get(self.opts.side)
+        ok = all(exp[sd] is not None and shas.get(sd) == exp[sd] for sd in exp)
+        return text, ok
 
     # ---- actions -------------------------------------------------------------------------------------------
     def start_teleop(self, o: Options) -> str:
@@ -445,15 +562,12 @@ class CollectionSession:
             raise SessionError("choose a method and an arm")
         if o.stage == "gate" and o.episodes < STAGE_EPISODES["gate"]:
             raise SessionError(f"a gate needs at least {STAGE_EPISODES['gate']} episodes")
-        if o.method == "pico" and o.side == "both":
-            raise SessionError("both arms with the PICO needs a two-arm remote receiver in lerobot (not there yet): "
-                               "use one arm, or the leader arms for both")
-        if bimanual_leader(o) and o.stage == "session" and not re.fullmatch(r"[A-Za-z0-9-]+", o.tag.strip()):
+        if bimanual(o) and o.stage == "session" and not re.fullmatch(r"[A-Za-z0-9-]+", o.tag.strip()):
             raise SessionError("both arms, session: type a tag (letters, digits, -), e.g. s2")
-        if not bimanual_leader(o) and o.stage != "dry" and (o.scene.strip() in ("", "none")
+        if not bimanual(o) and o.stage != "dry" and (o.scene.strip() in ("", "none")
                                                             or not (ORBOH / "scenes" / f"{o.scene.strip()}.yaml").exists()):
             raise SessionError("gate / session need a scene profile (openarm-orboh scenes/<name>.yaml), not 'none'")
-        if o.stage == "session" and not self.gate_ok(o.method, o.side, env_task() if bimanual_leader(o) else o.task):
+        if o.stage == "session" and not self.gate_ok(o.method, o.side, env_task() if bimanual(o) else o.task):
             raise SessionError(f"a session needs a reviewed gate of 10 for {o.method} / {o.side} first: record a gate, "
                                "show it to the reviewer, record their OK")
         ok, why = self.gng(o.side)
@@ -462,8 +576,14 @@ class CollectionSession:
         busy = self.probe()
         if busy:
             raise SessionError("another program already drives an arm: " + ", ".join(busy) + " (stop it first, rule R2)")
-        self.opts = dataclasses.replace(o, operator=o.operator.strip())
-        if bimanual_leader(o):                    # the script reads TASK from its task file (the page box is ignored)
+        pose_set = self.pose_sets(o.pose_set)
+        if not pose_set:
+            raise SessionError("no start-pose set: openarm-orboh config/pose_sets/CURRENT is missing and none was chosen")
+        missing = [sd for sd in (["left", "right"] if o.side == "both" else [o.side]) if self.expected_sha(sd, pose_set) is None]
+        if missing:
+            raise SessionError(f"start-pose set {pose_set} has no {' / '.join(missing)} pose file")
+        self.opts = dataclasses.replace(o, operator=o.operator.strip(), pose_set=pose_set)   # pinned for every child
+        if bimanual(o):                           # the script reads TASK from its task file (the page box is ignored)
             self.opts = dataclasses.replace(self.opts, task=env_task())
         if o.stage == "gate":                       # a new gate cancels the old OK (the Collect tab's rule)
             data = load_reviews(self.reviews_path)
@@ -471,14 +591,20 @@ class CollectionSession:
                 self.reviews_path.write_text(json.dumps(data, indent=1), encoding="utf-8")
         self.tag = f"gui-{o.method}-{o.side}-{dt.datetime.now():%Y%m%d-%H%M%S}"
         log_path = self.runs_dir / f"{self.tag}-sender.jsonl"
-        self._sha = None
-        self.teleop = self.spawn(teleop_command(self.opts, log_path), on_line=self._teleop_line)
+        self._shas = {}
+        self.checkouts = self.versions()
+        self.teleop = self.spawn(teleop_command(self.opts, log_path), env={"POSE_SET": self.opts.pose_set},
+                                 on_line=self._teleop_line)
         self.monitor = SenderMonitor(log_path, o.side, self.facing) if o.method == "pico" else None
         self.power_confirmed, self.recorder_used, self.spotter, self.alarm = False, False, "", ""
         self.episode, self.recording_now, self.run_dir, self.dataset = None, False, None, None
-        self.episode_walls, self.notes = {}, {}
+        self.episode_walls, self.episode_slip, self.episode_t, self.notes = {}, {}, {}, {}
         self._teleop_was_alive, self._recorder_was_alive = True, False
-        self._note(f"① started {o.method} teleop for the {o.side} arm ({self.tag}), operator {self.opts.operator}")
+        self._note(f"① started {o.method} teleop for the {o.side} arm ({self.tag}), operator {self.opts.operator}, "
+                   f"start-pose set {pose_set}")
+        oa = self.checkouts.get("openarm-orboh", {})
+        self._note(f"checkout: openarm-orboh {oa.get('branch', '?')} @ {oa.get('commit', oa.get('error', '?'))}"
+                   + (f" ({oa['uncommitted']} uncommitted)" if oa.get("uncommitted") else ""))
         return self.tag
 
     def confirm_power(self, spotter: str) -> None:
@@ -504,9 +630,10 @@ class CollectionSession:
         if self.locked():
             raise SessionError("the sender is LOCKED: stop the teleop (④) and start again" + EMERGENCY)
         if self.opts.method == "pico":
-            sha, ok = self.sha_line()  # one arm only (PICO both arms is refused at ①)
+            sha, ok = self.sha_line()
             if not ok:
-                raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {EXPECTED_SHA[self.opts.side]}")
+                exp = " / ".join(f"{v}" for v in self.expected().values())
+                raise SessionError(f"start pose sha is {sha or 'not printed yet'}, expected {exp} ({self.opts.pose_set})")
         if self.cameras_ok_at is None or time.monotonic() - self.cameras_ok_at > 600:
             raise SessionError("check the cameras first (button 'Check cameras', all found, within the last 10 minutes)")
         down = self.links(self.opts.method, self.opts.side)
@@ -538,6 +665,8 @@ class CollectionSession:
             with self._lock:
                 self.notes.pop(self.episode, None)       # the discarded take's notes go with it
                 self.episode_walls.pop(self.episode, None)
+                self.episode_slip.pop(self.episode, None)
+                self.episode_t.pop(self.episode, None)
         self._note({"next": "→ next / start episode", "rerecord": "← discard this take and re-record",
                     "reset": "a: return to the start pose (the arm moves" + (", the leader arm too" if self.opts.method == "leader" else "") + ")",
                     "stop": "esc: end recording (the arm returns and goes limp)"}[name])
@@ -639,19 +768,42 @@ class CollectionSession:
         if not self.tag:
             return None
         with self._lock:
-            eps = {str(k): {**v, "wall_s": round(self.episode_walls.get(k, 0.0), 1)} for k, v in sorted(self.notes.items())}
+            eps = {str(k): {**v, **self.episode_measures(k)} for k, v in sorted(self.notes.items())}
         p = self.runs_dir / f"{self.tag}-notes.json"
         p.write_text(json.dumps({"tag": self.tag, "options": dataclasses.asdict(self.opts), "spotter": self.spotter,
                                  "run_dir": self.run_dir, "dataset": self.dataset, "alarm": self.alarm,
+                                 "pose_set": self.opts.pose_set, "pose_sha": self.expected() if self.tag else {},
+                                 "checkouts": self.checkouts,
+                                 "wall_rule": {"wall_s": WALL_REVIEW_S, "slip_cm": SLIP_REVIEW_CM, "provisional": True,
+                                               "applies_to": "pico", "action": "flag for review, never discard"},
+                                 "sender_log": str(self.runs_dir / f"{self.tag}-sender.jsonl") if self.opts.method == "pico" else None,
                                  "episodes": eps}, indent=1), encoding="utf-8")
         return p
+
+    def episode_measures(self, ep: int) -> dict:
+        """Wall time, hand slip, sender-clock window and the review flag of one episode (PICO only flags)."""
+        wall = round(self.episode_walls.get(ep, 0.0), 1)
+        slip = self.episode_slip.get(ep)
+        out = {"wall_s": wall, "slip_cm": None if slip is None else round(slip, 1)}
+        if ep in self.episode_t:
+            out["sender_t"] = [round(x, 3) for x in self.episode_t[ep]]
+        why = review_reason(self.opts.method, wall, slip)
+        out["review"] = bool(why)
+        if why:
+            out["review_why"] = why
+        return out
 
     # ---- updates -------------------------------------------------------------------------------------------
     def poll(self) -> None:
         if self.monitor is not None:
             self.monitor.poll()
             if self.recording_now and self.episode is not None:
-                self.episode_walls[self.episode] = self.monitor.status.wall_s - self._wall_at_start
+                st = self.monitor.status
+                self.episode_walls[self.episode] = st.wall_s - self._wall_at_start
+                self.episode_slip[self.episode] = (None if st.slip_m is None or self._slip_at_start is None
+                                                   else (st.slip_m - self._slip_at_start) * 100.0)
+                if self.episode in self.episode_t:
+                    self.episode_t[self.episode][1] = st.t_abs
         # a child died while it mattered: alarm, flag the episode, keep the notes (goldfish GUI #3)
         if self._teleop_was_alive and not self.teleop_running:
             self._teleop_was_alive = False
@@ -705,8 +857,9 @@ class CollectionSession:
 
     def _teleop_line(self, text: str) -> None:
         m = SHA.search(text)
-        if m and getattr(self, "_sha", None) is None:
-            self._sha = m.group(1)          # kept for the whole run (Elephant GUI #9)
+        if m:
+            side = m.group(1) or self.opts.side
+            self._shas.setdefault(side, m.group(2))     # the first line per arm is kept for the whole run (Elephant GUI #9)
 
     def _recorder_line(self, text: str) -> None:
         m = RECORDING.search(text)
@@ -716,6 +869,9 @@ class CollectionSession:
                 self.recording_now, self.episode_started = True, time.monotonic()
                 self.notes.setdefault(self.episode, {"grasp": False, "placed": False, "text": ""})
                 self._wall_at_start = self.monitor.status.wall_s if self.monitor else 0.0
+                self._slip_at_start = self.monitor.status.slip_m if self.monitor else None
+                if self.monitor is not None:
+                    self.episode_t[self.episode] = [self.monitor.status.t_abs, self.monitor.status.t_abs]
         elif WAITING.search(text):
             self.recording_now = False
         if "No display detected: reading recording control keys from stdin" in text:

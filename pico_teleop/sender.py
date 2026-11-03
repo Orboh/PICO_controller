@@ -431,7 +431,10 @@ def main(argv=None) -> int:
                 rec["arms"][ch.side] = {"state": "STOPPED" if ch.stopped else ch.arm.state, "action": act, "seq": ch.seq, "event": ev,
                                         "link": ch.link_state(t0), "rtt_ms": ch.link.rtt_ms if ch.link else None,
                                         "follower": ch.link.follower if ch.link else None,
-                                        "wall": ch.arm.blocked_now}  # held at a wall THIS cycle (episode filter)
+                                        "wall": ch.arm.blocked_now,  # held at a wall THIS cycle (episode filter)
+                                        # cumulative hand slip since the sender started (log-047): the difference
+                                        # between two cycles is the slip in that window (per-episode rule, Kento 11-03)
+                                        "slip_m": round(ch.arm.slip_m, 4), "slip_deg": round(ch.arm.slip_deg, 2)}
                 if ev:
                     print(f"[{ch.side}] {ev}", flush=True)
             log.write(json.dumps(rec) + "\n")

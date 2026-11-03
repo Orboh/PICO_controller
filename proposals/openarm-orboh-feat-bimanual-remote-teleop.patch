@@ -1,0 +1,227 @@
+From 03729cfce81831d488ac873ff1a80d0684ec8e23 Mon Sep 17 00:00:00 2001
+From: Shreyan <shreyanshukla19@gmail.com>
+Date: Tue, 3 Nov 2026 15:22:34 +0900
+Subject: [PATCH] =?UTF-8?q?feat(record-bi):=20REMOTE=3Dtrue=20=E3=81=A7?=
+ =?UTF-8?q?=E4=B8=A1=E8=85=95=E3=81=AE=E9=81=A0=E9=9A=94=E3=83=86=E3=83=AC?=
+ =?UTF-8?q?=E3=82=AA=E3=83=9A=E5=8F=8E=E9=9B=86=EF=BC=88bi=5Fopenarm=5Flea?=
+ =?UTF-8?q?der=5Fremote=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Kento の依頼（2026-11-01 Slack・要望 5）: record_bimanual_openarm.sh が REMOTE=true で止まるのを外し、
+両腕の遠隔受け口 bi_openarm_leader_remote（lerobot feat/bi-openarm-leader-remote・44b260d6）で録る。
+
+- REMOTE=true: --teleop.type=bi_openarm_leader_remote --teleop.id=leader_remote と左右のポート
+  （既定 左 5702/5712・右 5701/5711 = run_leader_agent_{left,right}.sh・PICO sender と同じ。
+  L_ZMQ_PORT / L_ECHO_PORT / R_ZMQ_PORT / R_ECHO_PORT で変えられる）。
+- leader 実機だけの引数は渡さない: leader の CAN ポート、重力補償、bilateral（ゲイン含む）、
+  teleop 側の return_on_disconnect、teleop 側の initial_pose_path、--teleop.parallel_arms。
+  受け口の設定にこれらの欄は無く、渡すと lerobot-record が引数エラーで起動しない（draccus で確認）。
+- follower 側（整列・return_on_disconnect・開始姿勢・カメラ・ゲート）は従来どおり。
+- REMOTE=true と同時に使えないものは起動前に止める: START_POSE_HOLD=true（保持中は record が teleop を
+  読まず受け口が echo を返さないので、送信元が「受け口が止まった」と見て止まる。PICO sender は 30 秒）、
+  FREEZE_SIDE（bi_openarm_leader の機能）、BILATERAL_FEEDBACK=true（leader 実機が操作側 PC にある）。
+- dmlog は follower の 2 本だけ、collect_bimanual.sh の CAN 確認も REMOTE=true では follower の 2 本だけ。
+- console.log の要約と command.sh に REMOTE とポートを残す（type 判別子も remote 版に）。
+
+確認: lerobot-record を引数を表示するだけのスタブにして REMOTE=true / false の両方で起動
+（local の引数は並び以外変わらない）。REMOTE=true と START_POSE_HOLD=true は止まる。
+実機では未確認（両方の送信元を先に起こしてから record を起動すること）。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/collect_bimanual.sh        |   6 +-
+ scripts/record_bimanual_openarm.sh | 101 ++++++++++++++++++++++-------
+ 2 files changed, 83 insertions(+), 24 deletions(-)
+
+diff --git a/scripts/collect_bimanual.sh b/scripts/collect_bimanual.sh
+index cfcb742..7f1a4e7 100755
+--- a/scripts/collect_bimanual.sh
++++ b/scripts/collect_bimanual.sh
+@@ -81,8 +81,10 @@ fi
+ # CAN 4 本の事前確認（2026-10-21）。PEAK が USB ごと再接続されると udev は固定名だけ付け直し、
+ # ビットレート設定と UP は消える。そのまま起動するとフォロワー整列（約 30 秒）の後に
+ # リーダー connect で "Network is down" で落ちるので、起動前に止める。
+-if ! bash "$REPO/scripts/can_check.sh" can_lead_r can_lead_l can_fol_r can_fol_l; then
+-  echo "[collect-bi] CAN が 4 本そろっていない。sudo bash scripts/canup.sh をやり直してから再実行する。" >&2
++# REMOTE=true（遠隔テレオペ・2026-11-03）は leader が操作側 PC にあるので follower の 2 本だけ見る。
++if [ "${REMOTE:-false}" = "true" ]; then _can=(can_fol_r can_fol_l); else _can=(can_lead_r can_lead_l can_fol_r can_fol_l); fi
++if ! bash "$REPO/scripts/can_check.sh" "${_can[@]}"; then
++  echo "[collect-bi] CAN が ${#_can[@]} 本そろっていない（${_can[*]}）。sudo bash scripts/canup.sh をやり直してから再実行する。" >&2
+   echo "[collect-bi] 繰り返すなら PEAK の USB 抜けを疑う: journalctl -k | grep -E 'USB disconnect|error -71'" >&2
+   exit 1
+ fi
+diff --git a/scripts/record_bimanual_openarm.sh b/scripts/record_bimanual_openarm.sh
+index 7c56a55..c92adc9 100644
+--- a/scripts/record_bimanual_openarm.sh
++++ b/scripts/record_bimanual_openarm.sh
+@@ -30,6 +30,7 @@
+ #   CONSOLE_FILTER=off bash scripts/record_bimanual_openarm.sh <tag>   # 画面の間引き（scripts/record_console_filter.py・2026-09-22）を切って全行を表示。console.log は常に全行
+ #   DMLOG=off bash scripts/record_bimanual_openarm.sh <tag>   # Damiao CAN フィードバックの自動記録（下記）を切る（従来どおりの起動になる）
+ #   START_POSE_HOLD=true SAVE_ON_RETURN=true START_COUNTDOWN_S=3 bash scripts/record_bimanual_openarm.sh <tag>   # a の後は両腕を開始姿勢に保持・a の時点で保存・右矢印の後に秒読み（下の「開始姿勢での保持」・2026-10-06）
++#   REMOTE=true bash scripts/record_bimanual_openarm.sh <tag>   # 遠隔テレオペ（両腕）: teleop = bi_openarm_leader_remote（操作側 PC の 2 本の送信元・下の「Remote teleop」）
+ #
+ # Damiao CAN フィードバックの自動記録（2026-10-05・scripts/lib/dmlog.sh）: lerobot-record の起動直前に
+ #   受信専用ロガー（scripts/damiao_feedback_log.py・送信ゼロ）を裏で起こし、終了後に止めて要約を出す。
+@@ -52,11 +53,33 @@
+ #   条件を残さない dry run は SCENE=none / TODO 入りシーンは ALLOW_TODO_SCENE=true。
+ set -euo pipefail
+ 
+-# REMOTE=true は非対応: openarm_leader_remote は単腕専用で、bi_openarm_leader
+-# にリモート版が無い（遠隔両腕テレオペは別途 unit の対象外）。
+-if [ "${REMOTE:-false}" = "true" ]; then
+-  echo "[record-bi] REMOTE=true は両腕収集では非対応（openarm_leader_remote は単腕専用で bi_openarm_leader に remote 版が無い）" >&2
+-  exit 1
++# ---- Remote teleop（両腕・2026-11-03）-------------------------------------------
++# REMOTE=true: teleop を bi_openarm_leader_remote（lerobot feat/bi-openarm-leader-remote・単腕の
++# openarm_leader_remote を左右 2 本束ねたもの）に差し替える。leader 実機（CAN・重力補償・bilateral・
++# 開始姿勢への整列・return_on_disconnect）は操作側 PC の送信元（run_leader_agent_<side>.sh か PICO の
++# sender）の管轄なので、ここでは leader 側の引数を渡さない。follower 側は従来どおり。
++# ポートは送信元と一致させる（左 5702/5712・右 5701/5711）。record より先に両方の送信元を起こす。
++# パケットが途切れた腕は最後の指令を保持し（トルクは入ったまま）、再開時に resume_ramp_s で戻る（各腕ごと）。
++REMOTE="${REMOTE:-false}"
++case "$REMOTE" in true|false) ;; *) echo "[record-bi] REMOTE must be 'true' or 'false', got '$REMOTE'" >&2; exit 1 ;; esac
++L_ZMQ_PORT="${L_ZMQ_PORT:-5702}"; L_ECHO_PORT="${L_ECHO_PORT:-5712}"
++R_ZMQ_PORT="${R_ZMQ_PORT:-5701}"; R_ECHO_PORT="${R_ECHO_PORT:-5711}"
++if [ "$REMOTE" = "true" ]; then
++  # 開始姿勢での保持中は record が teleop を読まない（get_action を呼ばない）ので受け口が echo を返さず、
++  # 送信元は「受け口が止まった」と見て、長く続くと自分から止まる（PICO sender は 30 秒）。遠隔では保持を使わない。
++  if [ "${START_POSE_HOLD:-false}" = "true" ]; then
++    echo "[record-bi] REMOTE=true では START_POSE_HOLD=true を使えない（保持中は受け口が echo を返さず、送信元が止まる）" >&2
++    exit 1
++  fi
++  # 片腕の凍結（frozen_pose_path）は bi_openarm_leader の機能で、遠隔の受け口には無い
++  if [ -n "${FREEZE_SIDE:-}" ]; then
++    echo "[record-bi] REMOTE=true では FREEZE_SIDE を使えない（凍結は bi_openarm_leader 側の機能）" >&2
++    exit 1
++  fi
++  if [ "${BILATERAL_FEEDBACK:-false}" = "true" ]; then
++    echo "[record-bi] REMOTE=true では BILATERAL_FEEDBACK=true を使えない（leader 実機は操作側 PC にある）" >&2
++    exit 1
++  fi
+ fi
+ 
+ REPO="$(cd "$(dirname "$0")/.." && pwd)"
+@@ -216,9 +239,11 @@ ALIGN_GRAVITY_ARGS=()
+ # から脱力する。Ctrl-C は即時脱力（非常停止）のまま。RETURN_ON_EXIT=false で戻さない（run_teleop_bimanual.sh と同じ）
+ RETURN_ON_EXIT="${RETURN_ON_EXIT:-true}"
+ ALIGN_GRAVITY_ARGS+=(--robot.left_arm_config.return_on_disconnect="$RETURN_ON_EXIT"
+-                     --robot.right_arm_config.return_on_disconnect="$RETURN_ON_EXIT"
+-                     --teleop.left_arm_config.return_on_disconnect="$RETURN_ON_EXIT"
+-                     --teleop.right_arm_config.return_on_disconnect="$RETURN_ON_EXIT")
++                     --robot.right_arm_config.return_on_disconnect="$RETURN_ON_EXIT")
++if [ "$REMOTE" != "true" ]; then  # 遠隔: leader の戻しは操作側 PC の送信元の管轄
++  ALIGN_GRAVITY_ARGS+=(--teleop.left_arm_config.return_on_disconnect="$RETURN_ON_EXIT"
++                       --teleop.right_arm_config.return_on_disconnect="$RETURN_ON_EXIT")
++fi
+ if [ "$ALIGN_GRAVITY" = "true" ]; then
+   ALIGN_GRAVITY_ARGS+=(--robot.left_arm_config.align_gravity_urdf_path="$GRAVITY_URDF"
+                        --robot.right_arm_config.align_gravity_urdf_path="$GRAVITY_URDF")
+@@ -309,11 +334,15 @@ for _v in LEFT_POSE_PATH RIGHT_POSE_PATH; do
+ done
+ POSE_ARGS=()
+ if [ -f "$LPOSE" ]; then
+-  POSE_ARGS+=(--robot.left_arm_config.initial_pose_path="$LPOSE" --teleop.left_arm_config.initial_pose_path="$LPOSE")
++  POSE_ARGS+=(--robot.left_arm_config.initial_pose_path="$LPOSE")
++  [ "$REMOTE" != "true" ] && POSE_ARGS+=(--teleop.left_arm_config.initial_pose_path="$LPOSE")
+ fi
+ if [ -f "$RPOSE" ]; then
+-  POSE_ARGS+=(--robot.right_arm_config.initial_pose_path="$RPOSE" --teleop.right_arm_config.initial_pose_path="$RPOSE")
++  POSE_ARGS+=(--robot.right_arm_config.initial_pose_path="$RPOSE")
++  [ "$REMOTE" != "true" ] && POSE_ARGS+=(--teleop.right_arm_config.initial_pose_path="$RPOSE")
+ fi
++# 遠隔: 送信元も同じセットを使うこと（PICO sender は --pose-set、leader_agent は POSE_SET / CURRENT）。
++# 送信元の最初のパケットはそのセットの開始姿勢なので、違うセットだと follower が 1 歩で跳ぶ。
+ # 無い側は公式既定(肘36°)にフォールバックする。
+ 
+ # 片腕をカメラ役で固定する（v2・2026-09-23）。FREEZE_SIDE=right にすると、その側の leader を
+@@ -625,7 +654,11 @@ fi
+ # 設定要約も console.log に入れる(ここで新規作成し、以降は追記)。
+ {
+   echo "[record-bi] run_dir=$RUN_DIR  scene_tag=$TAG  ts_utc=$TS  host=$(hostname)"
+-  echo "[record-bi] follower=L:$FOLLOWER_L R:$FOLLOWER_R  leader=L:$LEADER_L R:$LEADER_R"
++  if [ "$REMOTE" = "true" ]; then
++    echo "[record-bi] follower=L:$FOLLOWER_L R:$FOLLOWER_R  teleop=REMOTE bi_openarm_leader_remote（左 zmq:$L_ZMQ_PORT echo:$L_ECHO_PORT / 右 zmq:$R_ZMQ_PORT echo:$R_ECHO_PORT・送信元は操作側 PC）  pose_set=$POSE_SET"
++  else
++    echo "[record-bi] follower=L:$FOLLOWER_L R:$FOLLOWER_R  leader=L:$LEADER_L R:$LEADER_R"
++  fi
+   echo "[record-bi] cameras=$CAMERAS"
+   echo "[record-bi] d405: $( [ -n "${D405_GAIN:-}" ] && echo "manual exposure=${D405_EXPOSURE:-28000}us gain=$D405_GAIN（camera_setup.py で焼き済み）" || echo "auto exposure（既定。垂らし姿勢で床を見る向きだけ暗く出る）" )"
+   echo "[record-bi] d435: auto exposure, brightness=${D435_BRIGHTNESS:-0}"
+@@ -733,11 +766,16 @@ COMMAND_SH="$RUN_DIR/command.sh"
+   echo '#!/usr/bin/env bash'
+   echo "# 自動生成: このセッションを同じ条件で起動し直す行。"
+   echo "# 解決済み設定の全文 -> console.log / 環境スナップショット -> manifest.json"
+-  echo "# 設定ダンプが落とす type 判別子: robot.type=bi_openarm_follower / teleop.type=bi_openarm_leader"
++  if [ "$REMOTE" = "true" ]; then
++    echo "# 設定ダンプが落とす type 判別子: robot.type=bi_openarm_follower / teleop.type=bi_openarm_leader_remote"
++  else
++    echo "# 設定ダンプが落とす type 判別子: robot.type=bi_openarm_follower / teleop.type=bi_openarm_leader"
++  fi
+   echo "# カメラ: $CAM_NOTE"
+   echo "set -euo pipefail"
+   printf 'OPERATOR=%q \\\n' "$OPERATOR"
+   printf 'JUDGE=%q \\\n' "$JUDGE"
++  printf 'REMOTE=%q L_ZMQ_PORT=%q L_ECHO_PORT=%q R_ZMQ_PORT=%q R_ECHO_PORT=%q \\\n' "$REMOTE" "$L_ZMQ_PORT" "$L_ECHO_PORT" "$R_ZMQ_PORT" "$R_ECHO_PORT"
+   printf 'SCENE=%q \\\n' "$SCENE"
+   printf 'CAM_SERIAL=%q CHEST_V4L2=%q \\\n' "$CAM_SERIAL" "$CHEST_V4L2"
+   printf 'WRIST_RIGHT=%q WRIST_RIGHT_SERIAL=%q WRIST_RIGHT_V4L2=%q \\\n' "$WRIST_RIGHT" "$WRIST_RIGHT_SERIAL" "$WRIST_RIGHT_V4L2"
+@@ -781,7 +819,33 @@ rm -f "$MANIFEST_INIT_OUT"
+ # 手前の検証 exit でロガーが孤児にならないようにするため。受信専用で腕の動きには関わらない。起動に失敗しても
+ # 警告だけで収集は続ける。DMLOG=off なら何もしない。
+ DMLOG_CONSOLE="$CONSOLE_LOG"
+-dmlog_start "$RUN_DIR/dmlog-$TAG" "$PYTHON_BIN" "$CONSOLE_LOG" "$FOLLOWER_L" "$FOLLOWER_R" "$LEADER_L" "$LEADER_R"
++if [ "$REMOTE" = "true" ]; then
++  dmlog_start "$RUN_DIR/dmlog-$TAG" "$PYTHON_BIN" "$CONSOLE_LOG" "$FOLLOWER_L" "$FOLLOWER_R"
++else
++  dmlog_start "$RUN_DIR/dmlog-$TAG" "$PYTHON_BIN" "$CONSOLE_LOG" "$FOLLOWER_L" "$FOLLOWER_R" "$LEADER_L" "$LEADER_R"
++fi
++
++# teleop 引数: local = leader 実機をこの PC の CAN で直接駆動 / remote = ZMQ で 2 本受ける
++if [ "$REMOTE" = "true" ]; then
++  TELEOP_ARGS=(
++    --teleop.type=bi_openarm_leader_remote
++    --teleop.id=leader_remote
++    --teleop.left_zmq_port="$L_ZMQ_PORT" --teleop.left_echo_port="$L_ECHO_PORT"
++    --teleop.right_zmq_port="$R_ZMQ_PORT" --teleop.right_echo_port="$R_ECHO_PORT"
++  )
++else
++  TELEOP_ARGS=(
++    --teleop.type=bi_openarm_leader
++    --teleop.parallel_arms="$PARALLEL_ARMS"
++    --teleop.left_arm_config.port="$LEADER_L"
++    --teleop.right_arm_config.port="$LEADER_R"
++    --teleop.id=leader
++    --teleop.left_arm_config.gravity_compensation="$GRAVITY_COMP" --teleop.left_arm_config.gravity_urdf_path="$GRAVITY_URDF" --teleop.left_arm_config.gravity_side=left --teleop.left_arm_config.gravity_scale="$LSCALE"
++    --teleop.right_arm_config.gravity_compensation="$GRAVITY_COMP" --teleop.right_arm_config.gravity_urdf_path="$GRAVITY_URDF" --teleop.right_arm_config.gravity_side=right --teleop.right_arm_config.gravity_scale="$RSCALE"
++    --teleop.left_arm_config.bilateral_feedback="$BILATERAL_FEEDBACK" --teleop.right_arm_config.bilateral_feedback="$BILATERAL_FEEDBACK"
++    ${BILATERAL_GRIPPER_ARGS[@]+"${BILATERAL_GRIPPER_ARGS[@]}"}
++  )
++fi
+ 
+ # 前に送れなかった記録（S3 の待ち行列）を裏で送る（2026-11-01 Kento 決定「人が打つ段は置かない」）。
+ # nice 19・ionice idle で収集を遅らせない。待たない。S3_FLUSH_ON_START=off で切れる。
+@@ -801,17 +865,10 @@ set +e
+   --robot.right_arm_config.port="$FOLLOWER_R" --robot.right_arm_config.side=right \
+   ${ALIGN_GRAVITY_ARGS[@]+"${ALIGN_GRAVITY_ARGS[@]}"} \
+   --robot.id=follower \
+-  --robot.parallel_arms="$PARALLEL_ARMS" --teleop.parallel_arms="$PARALLEL_ARMS" \
++  --robot.parallel_arms="$PARALLEL_ARMS" \
+   --parallel_leader_follower="$PARALLEL_LEADER_FOLLOWER" \
+   --robot.cameras="$CAMERAS" \
+-  --teleop.type=bi_openarm_leader \
+-  --teleop.left_arm_config.port="$LEADER_L" \
+-  --teleop.right_arm_config.port="$LEADER_R" \
+-  --teleop.id=leader \
+-  --teleop.left_arm_config.gravity_compensation="$GRAVITY_COMP" --teleop.left_arm_config.gravity_urdf_path="$GRAVITY_URDF" --teleop.left_arm_config.gravity_side=left --teleop.left_arm_config.gravity_scale="$LSCALE" \
+-  --teleop.right_arm_config.gravity_compensation="$GRAVITY_COMP" --teleop.right_arm_config.gravity_urdf_path="$GRAVITY_URDF" --teleop.right_arm_config.gravity_side=right --teleop.right_arm_config.gravity_scale="$RSCALE" \
+-  --teleop.left_arm_config.bilateral_feedback="$BILATERAL_FEEDBACK" --teleop.right_arm_config.bilateral_feedback="$BILATERAL_FEEDBACK" \
+-  ${BILATERAL_GRIPPER_ARGS[@]+"${BILATERAL_GRIPPER_ARGS[@]}"} \
++  "${TELEOP_ARGS[@]}" \
+   --display_data="$DISPLAY_DATA" \
+   ${DISPLAY_ARGS[@]+"${DISPLAY_ARGS[@]}"} \
+   --resume="$RESUME" \
+-- 
+2.25.1
+
