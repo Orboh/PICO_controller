@@ -1,5 +1,7 @@
 # PICO-controller — PICO 4 Ultra controllers → OpenArm follower
 
+**How to run (order, commands, which page has the details): [`RUN.md`](RUN.md).**
+
 Reads the PICO controllers, turns hand motion into follower joint angles (IK), validates every packet,
 and sends it to the existing follower receiver `openarm_leader_remote` (lerobot fork) on port 5701
 (right) / 5702 (left). The video path and the receiver are not rebuilt here.
