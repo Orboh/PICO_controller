@@ -26,23 +26,31 @@ def _wait(cond, timeout=3.0):
     return False
 
 
-class FakeSpawn:
-    """The teleop child prints a start-pose sha line then waits; the recorder echoes keys."""
+SHAS = {"left": "2ec31fb82bf0", "right": "a3b97b8e9d66"}   # the files of the pinned test set
 
-    def __init__(self, sha="2ec31fb82bf0", teleop_s=30):
-        self.sha, self.teleop_s, self.calls = sha, teleop_s, []
+
+class FakeSpawn:
+    """The teleop child prints a start-pose sha line per arm then waits; the recorder echoes keys."""
+
+    def __init__(self, sha="2ec31fb82bf0", teleop_s=30, right_sha="a3b97b8e9d66"):
+        self.sha, self.right_sha, self.teleop_s, self.calls = sha, right_sha, teleop_s, []
 
     def __call__(self, argv, env=None, on_line=None):
         self.calls.append((argv, env))
-        if "pilot_record.sh" in " ".join(argv):
+        if "pilot_record.sh" in " ".join(argv) or "collect_bimanual.sh" in " ".join(argv):
             return PtyChild(ECHO_KEYS, on_line=on_line)
-        return PtyChild([sys.executable, "-u", "-c",
-                         f"import time\nprint('[sender] left: start pose sha256 {self.sha} ok', flush=True)\ntime.sleep({self.teleop_s})"],
-                        on_line=on_line)
+        both = "both" in argv
+        lines = f"print('[sender] left: tcp://x start pose /p/left.yaml sha256 {self.sha} (compare)', flush=True)\n"
+        if both:
+            lines += f"print('[sender] right: tcp://x start pose /p/right.yaml sha256 {self.right_sha} (compare)', flush=True)\n"
+        return PtyChild([sys.executable, "-u", "-c", f"import time\n{lines}time.sleep({self.teleop_s})"], on_line=on_line)
 
 
 def _sess(tmp_path, **kw):
     kw.setdefault("links", lambda m, side: [])
+    kw.setdefault("expected_sha", lambda side, ps: SHAS[side] if ps == "test-set-v1" else None)
+    kw.setdefault("pose_sets", lambda name: name or "test-set-v1")
+    kw.setdefault("versions", lambda: {"openarm-orboh": {"branch": "feat/x", "commit": "e98e9874bb6f", "uncommitted": 2}})
     return CollectionSession(runs_dir=tmp_path, spawn=kw.pop("spawn", FakeSpawn()), probe=lambda: [],
                              gng=kw.pop("gng", lambda side: (True, "ok")), **kw)
 
@@ -319,7 +327,7 @@ def test_right_arrow_reaches_lerobots_real_key_reader(monkeypatch):
     assert _wait(lambda: any(l == "NEXT True" for l in c.lines), 6)
 
 
-def test_both_arms_leader_uses_collect_bimanual_and_pico_both_is_refused(tmp_path):
+def test_both_arms_leader_uses_collect_bimanual(tmp_path):
     o = Options(method="leader", side="both", stage="session", tag="s2", episodes=10, **OPS)
     argv, env = gs.recorder_command(o)
     assert argv[-4:] == ["collect_bimanual.sh", "session", "s2", "10"][-4:] or argv[1].endswith("collect_bimanual.sh")
@@ -328,8 +336,6 @@ def test_both_arms_leader_uses_collect_bimanual_and_pico_both_is_refused(tmp_pat
     assert "sleep infinity" in " ".join(gs.teleop_command(o, tmp_path / "x"))
     assert gs.recorder_command(Options(method="leader", side="both", stage="dry", episodes=2, **OPS))[0][2:] == ["dry", "2"]
     s = _sess(tmp_path)
-    with pytest.raises(SessionError, match="both arms with the PICO"):
-        s.start_teleop(Options(method="pico", side="both", **OPS))
     with pytest.raises(SessionError, match="type a tag"):
         s.start_teleop(Options(method="leader", side="both", stage="dry", **OPS) if False else Options(method="leader", side="both", stage="session", **OPS))
     downs = gs.links_down("leader", "both")
@@ -391,3 +397,116 @@ def test_every_refusal_has_japanese():
 def test_recorder_scripts_drop_display():
     for name in ("pilot_record.sh", "gate4_record.sh"):
         assert "env -u DISPLAY -u WAYLAND_DISPLAY" in (gs.REPO / "scripts" / name).read_text()
+
+
+def test_pico_both_arms_records_over_the_remote_receiver(tmp_path):
+    """log-047: PICO both arms = one sender (--arms both) + collect_bimanual.sh with REMOTE=true, no start-pose hold,
+    a dataset name that says pico, the pinned start-pose set for every child."""
+    o = Options(method="pico", side="both", stage="gate", episodes=10, pose_set="set-a", **OPS)
+    argv, env = gs.recorder_command(o)
+    assert argv[1].endswith("collect_bimanual.sh") and argv[2:] == ["gate", "10"]
+    assert env["REMOTE"] == "true" and env["START_POSE_HOLD"] == "false" and env["BILATERAL_FEEDBACK"] == "false"
+    assert env["POSE_SET"] == "set-a" and "_pico_" in env["REPO_ID"] and "L_BILATERAL_GRIPPER_KP" not in env
+    assert "REPO_ID" not in gs.recorder_command(dataclasses_replace(o, stage="dry"))[1]       # dry: the script's _test_ name
+    lead = gs.recorder_command(dataclasses_replace(o, method="leader"))[1]
+    assert lead["START_POSE_HOLD"] == "true" and "REMOTE" not in lead and lead["POSE_SET"] == "set-a"
+    tc = gs.teleop_command(o, tmp_path / "x.jsonl")
+    assert tc[tc.index("--arms") + 1] == "both" and tc[tc.index("--pose-set") + 1] == "set-a"
+    assert gs.links_down("pico", "both") == [n for n in gs.links_down("pico", "both") if n.startswith("can_fol_")]
+
+    sp = FakeSpawn()
+    s = _sess(tmp_path, spawn=sp)
+    s.start_teleop(Options(method="pico", side="both", stage="dry", **OPS))
+    assert s.opts.pose_set == "test-set-v1" and sp.calls[0][1]["POSE_SET"] == "test-set-v1"
+    assert _wait(lambda: s.sha_line()[1]), s.sha_line()
+    assert s.sha_line()[0] == "L 2ec31fb82bf0 / R a3b97b8e9d66"
+    s.confirm_power("Suraj")
+    s.cameras_ok_at = time.monotonic()
+    s.start_recorder()
+    assert sp.calls[-1][1]["REMOTE"] == "true"
+    s.teleop.proc.kill(); s.recorder.proc.kill()
+
+
+def test_wrong_right_arm_sha_blocks_both_arms(tmp_path):
+    s = _sess(tmp_path, spawn=FakeSpawn(right_sha="deadbeef0000"))
+    s.start_teleop(Options(method="pico", side="both", **OPS))
+    assert _wait(lambda: s.sha_line()[0] is not None and "R " in s.sha_line()[0])
+    s.confirm_power("Suraj")
+    s.cameras_ok_at = time.monotonic()
+    with pytest.raises(SessionError, match="start pose sha"):
+        s.start_recorder()
+    s.teleop.proc.kill()
+
+
+def test_unknown_pose_set_is_refused_at_start(tmp_path):
+    s = _sess(tmp_path)
+    with pytest.raises(SessionError, match="start-pose set nope has no left"):
+        s.start_teleop(Options(pose_set="nope", **OPS))
+    s = _sess(tmp_path, pose_sets=lambda name: "")
+    with pytest.raises(SessionError, match="no start-pose set"):
+        s.start_teleop(Options(**OPS))
+
+
+def test_pose_sha_and_current_read_the_set_files(tmp_path):
+    (tmp_path / "s1").mkdir()
+    (tmp_path / "s1" / "left.yaml").write_text("joint_1: 1\n")
+    (tmp_path / "CURRENT").write_text("s1\n")
+    import hashlib
+    assert gs.pose_sha("left", "s1", tmp_path) == hashlib.sha256(b"joint_1: 1\n").hexdigest()[:12]
+    assert gs.pose_sha("right", "s1", tmp_path) is None
+    assert gs.resolve_pose_set("", tmp_path) == "s1" and gs.resolve_pose_set(" other ", tmp_path) == "other"
+
+
+def test_notes_carry_checkouts_slip_and_review_flags(tmp_path):
+    """Kento 11-03: branch + commit in the notes of every session; per-episode wall time + slip; flag (never drop)
+    PICO episodes over 3 s at a wall or 20 cm of slip (provisional)."""
+    s = _sess(tmp_path)
+    _ready(s)
+    log = s.monitor.path
+    rows = [json.dumps({"session": "x", "args": {"hz": 50.0}})]
+    for k in range(250):     # 5 s: wall in the last 4 s, 0.25 m slip
+        rows.append(json.dumps({"t": 1000 + k * 0.02, "frame": {},
+                                "arms": {"left": {"state": "ENGAGED", "link": "ok", "wall": "joint_2" if k >= 50 else None,
+                                                  "slip_m": 0.001 * max(0, k - 50) * 1.25, "slip_deg": 0}}}))
+    log.write_text("\n".join(rows[:2]) + "\n")
+    s.poll()
+    s._recorder_line("  録画中 episode 0（30 秒で自動終了）")    # the episode starts at the log's first cycle
+    with open(log, "a") as f:
+        f.write("\n".join(rows[2:]) + "\n")
+    s.poll()
+    m = s.episode_measures(0)
+    assert m["wall_s"] == pytest.approx(4.0, abs=0.05) and m["slip_cm"] == pytest.approx(24.9, abs=0.2)
+    assert m["review"] and "wall" in m["review_why"] and "slip" in m["review_why"]
+    assert m["sender_t"][1] == pytest.approx(1000 + 249 * 0.02, abs=1e-3)
+    notes = json.loads(s.save_notes().read_text())
+    assert notes["checkouts"]["openarm-orboh"]["commit"] == "e98e9874bb6f" and notes["pose_set"] == "test-set-v1"
+    assert notes["pose_sha"] == {"left": SHAS["left"]} and notes["wall_rule"]["provisional"]
+    assert notes["episodes"]["0"]["review"] is True
+    assert gs.review_reason("leader", 99, 99) == ""            # leader episodes cannot slip
+    assert gs.review_reason("pico", 3.0, 20.0) == ""            # "more than", not "at least"
+    for c in (s.recorder, s.teleop):
+        c.proc.kill()
+
+
+def test_monitor_both_arms_combines_state_walls_and_slip(tmp_path):
+    p = tmp_path / "s.jsonl"
+    rows = [json.dumps({"session": "x", "args": {"hz": 50.0}})]
+    for k in range(10):
+        rows.append(json.dumps({"t": k * 0.02, "frame": {}, "arms": {
+            "left": {"state": "HOLD", "link": "ok", "wall": None, "slip_m": 0.1, "event": None},
+            "right": {"state": "ENGAGED", "link": "ok", "wall": "joint_1 drift" if k > 4 else None, "slip_m": 0.05,
+                      "event": "WALL: joint_1" if k == 5 else None}}}))
+    p.write_text("\n".join(rows) + "\n")
+    m = SenderMonitor(p, "both")
+    s = m.poll()
+    assert s.state == "ENGAGED" and s.link == "ok" and s.wall == "right: joint_1 drift"
+    assert s.wall_s == pytest.approx(5 / 50) and s.slip_m == pytest.approx(0.15)
+    assert m.events[-1][1] == "[right] WALL: joint_1"
+    old = tmp_path / "old.jsonl"     # a sender from before log-047 has no slip field
+    old.write_text(json.dumps({"t": 0, "frame": {}, "arms": {"left": {"state": "HOLD"}}}) + "\n")
+    assert SenderMonitor(old, "left").poll().slip_m is None
+
+
+def dataclasses_replace(o, **kw):
+    import dataclasses
+    return dataclasses.replace(o, **kw)

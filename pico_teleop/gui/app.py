@@ -18,7 +18,7 @@ from nicegui import context, run, ui
 
 from . import checks
 from .i18n import refusal, t
-from .session import EXPECTED_SHA, SIDES, STAGE_EPISODES, CollectionSession, Options, SessionError
+from .session import SIDES, STAGE_EPISODES, CollectionSession, Options, SessionError
 
 try:  # the headset's facing angle, same formula as the sender's facing check
     from pico_teleop.sender import headset_facing_deg
@@ -181,6 +181,9 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                 import pathlib as _pl
                 scenes = sorted(p.stem for p in (_pl.Path("~/projects/openarm-orboh/scenes").expanduser()).glob("*.yaml") if not p.stem.startswith("_"))
                 scene_in = tx(ui.select(["none"] + scenes, value="none").bind_value(o, "scene").classes("w-72"), "scene", "label")
+                pose_sets = sorted(p.name for p in (_pl.Path("~/projects/openarm-orboh/config/pose_sets").expanduser()).iterdir()
+                                   if (p / "set.yaml").exists()) if _pl.Path("~/projects/openarm-orboh/config/pose_sets").expanduser().is_dir() else []
+                tx(ui.select([""] + pose_sets, value="").bind_value(o, "pose_set").classes("w-72"), "pose_set", "label")
                 with ui.row().classes("w-full"):
                     tx(ui.number(value=2, min=1, max=50, precision=0).bind_value(o, "episodes", forward=lambda v: int(v or 1)).classes("w-28"), "episodes", "label")
                     tx(ui.number(value=30, min=0, max=300, precision=0).bind_value(o, "episode_time_s", forward=lambda v: int(v or 0)).classes("w-28"), "seconds", "label")
@@ -325,7 +328,9 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
 
     def refresh_episodes():
         key = (lang["v"], tuple(sorted(sess.notes)), sess.episode, sess.recording_now,
-               tuple(sorted((k, v["text"]) for k, v in sess.notes.items())))
+               tuple(sorted((k, v["text"]) for k, v in sess.notes.items())),
+               tuple(sorted((k, round(v, 1)) for k, v in sess.episode_walls.items())),
+               tuple(sorted((k, round(v or 0, 0)) for k, v in sess.episode_slip.items())))
         if key == seen["eps"]:
             return
         seen["eps"] = key
@@ -340,7 +345,11 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
                     ui.checkbox(L("grasp"), value=n["grasp"], on_change=lambda e, ep=ep: sess.set_note(ep, grasp=e.value))
                     ui.checkbox(L("placed"), value=n["placed"], on_change=lambda e, ep=ep: sess.set_note(ep, placed=e.value))
                     ui.input(placeholder=L("note"), value=n["text"], on_change=lambda e, ep=ep: sess.set_note(ep, text=e.value)).classes("grow")
-                    ui.label(L("boundary_s", s=sess.episode_walls.get(ep, 0.0))).classes("text-caption w-24")
+                    m = sess.episode_measures(ep)
+                    ui.label(L("boundary_s", s=m["wall_s"]) + ("" if m["slip_cm"] is None else " · " + L("slip_cm", c=f"{m['slip_cm']:.0f}"))
+                             ).classes("text-caption w-40")
+                    if m["review"]:
+                        ui.label(L("review_flag", why=m["review_why"])).classes("text-caption text-orange-9")
 
     def tick():
         sess.poll()
@@ -349,13 +358,13 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
         if st_toggle.value != o.stage:
             st_toggle.value = o.stage
         both_note.text = (L("both.pico") if o.method == "pico" else L("both.leader")) if o.side == "both" else ""
-        tag_in.set_visibility(o.side == "both" and o.method == "leader" and o.stage == "session")
-        task_in.set_visibility(not (o.side == "both" and o.method == "leader"))   # both arms: the task file's TASK
-        both_l = o.side == "both" and o.method == "leader"
+        tag_in.set_visibility(o.side == "both" and o.stage == "session")
+        task_in.set_visibility(o.side != "both")   # both arms: the task file's TASK
+        both_l = o.side == "both"
         if both_l != seen.get("both_l") and not sess.running:   # both arms: 0 s = the task file's EPISODE_TIME_S (120 s)
             seen["both_l"] = both_l
             o.episode_time_s = 0 if both_l else (30 if o.episode_time_s == 0 else o.episode_time_s)
-        scene_in.set_visibility(not (o.side == "both" and o.method == "leader") and o.stage != "dry")
+        scene_in.set_visibility(o.side != "both" and o.stage != "dry")
         stage_help.text = L(f"stage.{o.stage}") + ("" if o.stage != "session" else
                                                    ("  ✅ gate OK: " + sess.gate_ok(o.method, o.side)["reviewer"]) if sess.gate_ok(o.method, o.side)
                                                    else "  ⛔ no reviewed gate yet")
@@ -419,7 +428,8 @@ def build(sess: CollectionSession, board: CheckBoard) -> None:
             pull(tel_log, sess.teleop, "tel")
         sha, sha_ok = sess.sha_line()
         st_sha.text = "" if sess.opts.method != "pico" or not tel else (
-            f"start pose sha {sha} ✅" if sha_ok else f"start pose sha {sha or '…'} (expected {EXPECTED_SHA[sess.opts.side]})")
+            f"start pose sha {sha} ✅ ({sess.opts.pose_set})" if sha_ok else
+            f"start pose sha {sha or '…'} (expected {' / '.join(str(v) for v in sess.expected().values())}, {sess.opts.pose_set})")
         elapsed = (f" · {time.monotonic() - sess.episode_started:.0f} / {sess.opts.episode_time_s} s"
                    if sess.recording_now and sess.episode_started else "")
         keys = ("" if not rec else " · keys from this page ✅" if sess.keys_from_page else

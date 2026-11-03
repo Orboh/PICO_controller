@@ -24,8 +24,12 @@ TEXT: dict[str, tuple[str, str]] = {
     "tag": ("Session tag (e.g. s2)", "session のタグ（例 s2）"),
     "both.leader": ("Both arms with the leader arms: the team's collect_bimanual.sh records (as the Collect tab); ① only prepares.",
                     "両腕・リーダーアーム: チームの collect_bimanual.sh で記録（Collect タブと同じ）。① は準備だけ。"),
-    "both.pico": ("Both arms with the PICO: not possible yet (lerobot has no two-arm remote receiver; request to Kento).",
-                  "両腕・PICO: まだできない（lerobot に両腕のリモート受信が無い。Kento さんに依頼）。"),
+    "both.pico": ("Both arms with the PICO: one sender for both controllers; collect_bimanual.sh records with REMOTE=true "
+                  "(needs lerobot feat/bi-openarm-leader-remote and openarm-orboh feat/bimanual-remote-teleop on the follower PC; "
+                  "not yet run on the robot). No start-pose hold.",
+                  "両腕・PICO: 1 つの sender で両方のコントローラ。collect_bimanual.sh が REMOTE=true で記録"
+                  "（follower PC に lerobot feat/bi-openarm-leader-remote と openarm-orboh feat/bimanual-remote-teleop が要る。"
+                  "実機ではまだ未実施）。開始姿勢での保持なし。"),
     "stage": ("Stage", "段階"),
     "stage.dry": ("dry (2 throw-away, check)", "dry（捨て2本・動作確認）"),
     "stage.gate": ("gate (10 for review)", "gate（受入10本・確認待ち）"),
@@ -40,6 +44,10 @@ TEXT: dict[str, tuple[str, str]] = {
     "no_ep": ("no episode yet", "まだありません"),
     "grasp": ("grasp", "把持"), "placed": ("placed", "置けた"), "note": ("note", "メモ"),
     "boundary_s": ("boundary {s:.1f} s", "境界 {s:.1f} 秒"),
+    "slip_cm": ("slip {c} cm", "ずれ {c} cm"),
+    "review_flag": ("⚑ review: {why}", "⚑ 要確認: {why}"),
+    "pose_set": ("Start-pose set (empty = CURRENT; the same set for every method)",
+                 "開始姿勢セット（空 = CURRENT・どの方式も同じセット）"),
     "review": ("Gate review", "gate の確認"),
     "review_info": ("Gate finished: {n} episodes. Show it to the reviewer; a session starts only after their OK.",
                     "gate 終了: {n} 本。確認者に見せる。OK の後でだけ session を始められる。"),
@@ -143,7 +151,8 @@ REFUSALS_JA: list[tuple[str, str]] = [
     ("CAN link down", "CAN が落ちています。腕の電源は ON？ canup.sh（openarm-orboh）を実行してから ③ をもう一度"),
     ("use End recording first", "先に「記録終了」を。終わらないときだけ中断"),
     ("confirm: the follower arm is off", "確認: フォロワーアームの電源が切れているか支えている（Ctrl-C で電源の入った腕は力が抜ける）"),
-    ("both arms with the PICO", "両腕の PICO はまだできません（lerobot に両腕のリモート受信が無い）。片腕か、両腕はリーダーアームで"),
+    ("no start-pose set", "開始姿勢セットがありません（openarm-orboh config/pose_sets/CURRENT が無く、選ばれてもいない）"),
+    ("start-pose set", "選んだ開始姿勢セットに、この腕の姿勢ファイルがありません"),
     ("both arms, session: type a tag", "両腕の session: タグ（英数字と -、例 s2）を入れてください"),
     ("runbook not found", "runbook（docs/hardware-runbook.md）が見つかりません"),
     ("unknown key", "不明なキーです"),

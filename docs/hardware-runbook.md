@@ -93,7 +93,9 @@ Roles: operator (headset) **and a separate spotter at the e-stop**; keyboard per
 Before: today's go/no-go column filled; the arm's sweep area clear for a joint_1 swing of up to 120°.
 1. Input check: `bash ~/projects/PICO-controller/scripts/check_input.sh` → expect `rate ~50-80 Hz | L ok`.
 2. Terminal A: `bash ~/projects/PICO-controller/scripts/gate4_sender.sh pilot-pico-<n>` → expect the
-   start-pose line with sha `2ec31fb82bf0`, then `HOLD`.
+   start-pose line with the sha of the follower's set (`sha256sum ~/projects/openarm-orboh/config/pose_sets/$(cat
+   ~/projects/openarm-orboh/config/pose_sets/CURRENT)/left.yaml`; takeei-v2 was `2ec31fb82bf0`; since log-046 the
+   CURRENT set is kitakyushu-wood-l1-pico-v1), then `HOLD`. The website does this comparison itself (log-047).
 3. Spotter: **"arm may move"** → left arm power supply (PSU) on.
 4. Terminal B: `bash ~/projects/PICO-controller/scripts/pilot_record.sh pico` → **the arm moves by itself**
    to the start pose; spotter compares with the printed start pose, then says "ready".
@@ -105,7 +107,8 @@ Before: today's go/no-go column filled; the arm's sweep area clear for a joint_1
 
 ## One-arm sessions without recording: R1 position, W1 / R2 wrist (log-026)
 Script: `bash ~/projects/PICO-controller/scripts/arm_session.sh <left|right> <position|wrist>`.
-It shows the `[sender]` start-pose line: check the sha (left `2ec31fb82bf0`, right `a3b97b8e9d66`).
+It shows the `[sender]` start-pose line: check the sha against `sha256sum` of the follower's CURRENT set file
+(takeei-v2 was left `2ec31fb82bf0`, right `a3b97b8e9d66`; since log-046 CURRENT is kitakyushu-wood-l1-pico-v1).
 | | left | right |
 |---|---|---|
 | power supply | left PSU | **right PSU** |

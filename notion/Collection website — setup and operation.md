@@ -29,9 +29,11 @@ uv venv --python 3.10 .venv && uv pip install --python .venv/bin/python "pin==4.
 bash scripts/test.sh -q        # offline tests, no hardware
 ```
 Also needed (as on the operator PC on 2026-11-01): the PICO setup (`docs/pico-working-setup.md`);
-`~/projects/openarm-orboh` on `feat/takeei-wood-l1` @ e98e987 (recorder scripts, leader agents, pose sets, `scenes/`,
-`canup.sh`); `~/projects/lerobot` on `feat/bi-openarm-soft-move-to` with its `.venv` (recorder, RealSense). Branches to be
-confirmed by Kento-san. Safety: `docs/hardware-runbook.md` (go/no-go, R1-R4, spotter card) and the OpenArm safety protocol
+`~/projects/openarm-orboh` (recorder scripts, leader agents, pose sets, `scenes/`, `canup.sh`; Kento-san does not pin a
+branch: **the page writes its branch + commit into every session's notes**, log-047); `~/projects/lerobot` on
+`feat/bi-openarm-soft-move-to` with its `.venv` (confirmed by Kento-san 11-01). **Both arms with the PICO** also needs lerobot
+`feat/bi-openarm-leader-remote` (Kento's two-arm receiver) and openarm-orboh `feat/bimanual-remote-teleop` (REMOTE=true in
+the bimanual recorder) on the follower PC; both are branches for review, not yet run on the robot. Safety: `docs/hardware-runbook.md` (go/no-go, R1-R4, spotter card) and the OpenArm safety protocol
 (Notion; archived copy in `notion/`). The **spotter fills today's go/no-go column** in the runbook before the session.
 
 ## Start
@@ -74,12 +76,17 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
    Red items show what to do. Fix them before ①.
 - **Card 1 — Setup**: method (PICO → follower / Leader arm → follower), arm (**left / right / both**), **stage**, episodes,
    seconds, operator name, task (same text for both methods; hidden for both arms: the task file's TASK is used), **scene** (gate/session, one arm: an openarm-orboh
-   `scenes/<name>.yaml`); PICO: smooth motion (on), wrist rotation, pre-move.
-   - **Both arms**: with the leader arms only. The page runs the team's `collect_bimanual.sh <dry|gate|session> [tag] [n]`
-     exactly like the Collect tab (its task file `config/bimanual-collect.kitakyushu_takeei_sort.env`, its dataset names,
-     its 4-CAN check); ① only prepares (no leader agent: the recorder reads both leader arms itself). A session needs a
-     tag (e.g. `s2`); seconds 0 = the task file's length (120 s for sorting). **Both arms with the PICO is not possible
-     yet** (lerobot has no two-arm remote receiver).
+   `scenes/<name>.yaml`), **start-pose set** (empty = openarm-orboh's `CURRENT`, read at ① and then **pinned for every
+   program of the run**: sender `--pose-set`, leader agent and recorder `POSE_SET`; the leader and the PICO must use the
+   same set for a fair comparison); PICO: smooth motion (on), wrist rotation, pre-move.
+   - **Both arms**: the page runs the team's `collect_bimanual.sh <dry|gate|session> [tag] [n]` like the Collect tab (its
+     task file `config/bimanual-collect.kitakyushu_takeei_sort.env`, its dataset names). Leader arms: ① only prepares (the
+     recorder reads both leader arms itself; 4-CAN check). **PICO** (log-047): ① starts one sender for both controllers
+     (`--arms both`); the recorder runs with `REMOTE=true` (two-arm remote receiver, follower CAN only), **no start-pose
+     hold** (while held, lerobot does not read the receiver and the sender would stop), dataset
+     `Orboh/bi_openarm_<task>_chest_wristr_pico_v1_<time>` so it never mixes with leader data. A session needs a tag
+     (e.g. `s2`); seconds 0 = the task file's length (120 s for sorting). The page's start-pose set overrides the task
+     file's `POSE_SET`.
    - **Smooth motion** is on by default on the page (the terminal sender's default is off). The settings are saved in
      the notes file of each run; do not mix settings inside one comparison block.
    - **dry** = 2 throw-away episodes to check everything (dataset `…_tmp`);
@@ -95,9 +102,14 @@ control keys from stdin"). If it says "keys NOT from this page", end the recordi
    per ①; for another, ④ then ① again. Operating the controllers (grip, trigger, gripper, buttons): see "Working setup
    for PICO" → "How to operate".
    - **Live status** (PICO): HOLD / ENGAGED / FAULT / LOCKED, link, input rate, facing, BOUNDARY (wall) and its time,
-     start-pose sha; recording episode and its time.
-   - **Episodes**: grasp / placed / note and boundary time, saved at once to `runs/gui-<method>-<arm>-<time>-notes.json`
-     (with settings, spotter, run folder, dataset).
+     start-pose sha per arm (must equal the pinned set's files; ③ is refused otherwise); recording episode and its time.
+   - **Episodes**: grasp / placed / note, boundary time and **hand slip** (PICO), and **⚑ review** when an episode spent
+     more than **3 s at a wall** or had more than **20 cm of hand slip** (Kento 11-03: provisional values, PICO only;
+     flagged episodes are **never dropped automatically**: before training, someone watches the flagged part and decides
+     keep / trim / drop). Saved at once to `runs/gui-<method>-<arm>-<time>-notes.json` with settings, spotter, run folder,
+     dataset, **start-pose set + sha, branch + commit of openarm-orboh / lerobot / PICO_controller**, the rule's values
+     and each episode's window on the sender clock. Distribution and flagged list: `python tools/wall_report.py
+     --from-log` (`--json` for Kento).
 - **Logs**: session log, recorder output, teleop events.
 
 ## What the page does NOT protect against
@@ -110,7 +122,8 @@ Start without an operator name, with go/no-go not all PASS or item 5 not saying 
 sender running; a gate with fewer than 10 episodes; a session without a reviewed complete gate (same method, arm, task);
 recording before ②, without a camera check in the last 10 minutes, or with a CAN link down; a wrong start pose;
 a second pre-move away from the start pose; End / Return / Discard while the operator squeezes; Next after
-LOCKED; for the leader arm: End / Return / ④ without "the leader arm is held".
+LOCKED; for the leader arm: End / Return / ④ without "the leader arm is held"; a start-pose set that is missing or has
+no pose file for the chosen arm.
 
 ## Did it save?
 When the recorder ends, the status line shows **"saved N of M"** (from the run folder's `manifest.json`); a red banner

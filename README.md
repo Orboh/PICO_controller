@@ -19,7 +19,7 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 | 4 recording dry run | **PASS** 2026-10-31: lerobot-record with the PICO, chest + left wrist, follower tracks the actions (log-020) | a leader-arm recording with the same command for the side-by-side schema check |
 | 2 axis signs (no arm) | **PASS** both arms 2026-10-31 (log-008) | — |
 | 2b wrist rotation | offline + dry run PASS (log-015/016); real arm: left roll/pitch/yaw 1:1 (log-019, log-027), right roll left (log-029); with walls no lock (log-034) | right-arm wrist with the wall version; pitch right arm |
-| pilot (leader vs PICO) | leader × 5 (log-021); PICO 11-01: 2 good episodes with joint_1 120° (log-025), then locked → wall fix (log-030/033), **wall check PASS on the left arm** (log-034) | PICO block × 5 with the wall; episode wall/slip rule; joint_7 leader offset (Kento) |
+| pilot (leader vs PICO) | leader × 5 (log-021); PICO 11-01: 2 good episodes with joint_1 120° (log-025), then locked → wall fix (log-030/033), **wall check PASS on the left arm** (log-034) | new start-pose set kitakyushu-wood-l1-pico-v1 (log-046, joint_7 gap gone); re-record the leader block, then PICO block × 5 on the same set; wall/slip rule built (flag only, log-047) |
 | 5 hardware | **PASS** 10-31 left arm (log-010/011/014); 11-01 **right arm first session** position PASS (log-029, Kento-san / Suraj); wall check left (log-034) | wall check on the right arm; gripper force feedback; follower-feedback patch (Kento) |
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
@@ -31,7 +31,7 @@ First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 4. [x] Elephant + Goldfish review of the day (log-035): code fixes applied; **process gap: steps 5 ran minutes after the commit, before this review**
 5. [x] Arm: wall check PASS on the left arm (log-034: 94 walls, no lock): joint-limit, drift and rotation walls seen; **stretched-arm / out-of-reach / joint-jump walls not yet seen on the robot**
 6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
-7. [ ] PICO block × 5 (left) with the wall; wall time per episode from the log
+7. [ ] PICO block × 5 (left) with the wall; wall time + slip per episode: page notes / `tools/wall_report.py` (log-047)
 8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
 Side task: PICO video (FPV) with an on/off button on the controller (log-031): built, not used (Wi-Fi load).
 Jerk (log-032): `HZ=60 ACC=300` not yet on the arm (the wall checks ran with it off): needs its own supervised check before recording with it.

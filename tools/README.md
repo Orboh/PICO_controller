@@ -8,3 +8,5 @@ Replay input = the `frame` lines of a sender log: `python3 -c` one-liner in log-
 | `wristcheck.py <sender.jsonl> <side>` | per squeeze: hand turn vs commanded gripper turn |
 | `rotspeed.py <sender.jsonl>` | hand rotation speed around WALL / FAULT events |
 | `wristsim2.py <side>` / `wristsim3.py` | how far each wrist direction can turn (from start / after moving forward) |
+| `wall_report.py [notes…] [--from-log] [--json]` | log-047: per-episode wall time + hand slip of PICO episodes from the page's notes, distribution, flagged list (> 3 s / > 20 cm, provisional) |
+| `rebuild_actions.py <src> <dst> --lead 3` | log-047 (Kento's side experiment): NEW dataset version whose arm actions = follower's measured joints `lead` frames ahead, gripper kept; run in the lerobot venv |
