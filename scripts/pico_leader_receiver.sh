@@ -33,9 +33,9 @@ CAL_DST="$CAL_DIR/robots/openarm_follower/${CAL_ID}.json"
 
 # 1) 同じ腕を指令するものが走っていないか
 #    leader_agent はどちらの腕でも止める（リーダーを触る別の流れと混ぜない）
-if pgrep -f "[l]eader_agent" >/dev/null; then
+if pgrep -f "[l]erobot\.teleoperators\.openarm_leader_remote\.leader_agent|[r]un_leader_agent_(left|right)\.sh" >/dev/null; then
   echo "[pico-leader] leader_agent が走っている。先に止める（腕を支えてから Ctrl-C）:" >&2
-  pgrep -af "[l]eader_agent" >&2; exit 2
+  pgrep -af "[l]erobot\.teleoperators\.openarm_leader_remote\.leader_agent|[r]un_leader_agent_(left|right)\.sh" >&2; exit 2
 fi
 if pgrep -f "[p]ort[= ]$PORT( |$)" >/dev/null; then
   echo "[pico-leader] $PORT を使うプログラムが走っている:" >&2; pgrep -af "[p]ort[= ]$PORT( |$)" >&2; exit 2

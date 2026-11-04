@@ -33,8 +33,10 @@ block), 2 two-arm PICO, 3 wall/slip report, 4 e98e987, 5 command channel. People
 keyboard person named per session. **Every robot step: one arm and one program at a time, `POSE_SET=` always given
 (CURRENT is the dropped wood-l1-pico-v1), no website, leader trigger untouched.**
 
+**Result 16:0x: Suraj chose `kitakyushu-takeei-v5-pico-v5` as the leader start pose (log-049 "Decision"). Next: D (follower, after Kento's OK), E (PR + Slack).**
+
 **A. Make it safe (no robot)**
-1. [ ] Right follower drop 11-04 13:04 (log-049): Suraj states the cause (e-stop / power cut) and Kota checks the arm
+1. [x] (done 14:50: a person stopped it on purpose as a test) Right follower drop 11-04 13:04 (log-049): Suraj states the cause (e-stop / power cut) and Kota checks the arm
    (`openarm_motorcheck.py --only can_fol_r`, all 8 answer, joints move freely by hand). **Until logged: no right follower.**
 2. [ ] Website stays off for this plan (it records and freezes sets; wrist switch not tied to item 10). New go/no-go
    column for each session day: daily items 3, 4, 8 redone; item 5 without a `collect:` token until Kento names one;
@@ -44,19 +46,19 @@ keyboard person named per session. **Every robot step: one arm and one program a
    (c) restore CURRENT (Kota/Kento; not committed by us).
 
 **B. A clean start pose**
-4. [ ] `python3 scripts/pose_set.py new kitakyushu-takeei-v5-pico-v5 --from kitakyushu-takeei-v5-pico-v4 --scene
+4. [x] (14:55, offline 12°) `python3 scripts/pose_set.py new kitakyushu-takeei-v5-pico-v5 --from kitakyushu-takeei-v5-pico-v4 --scene
    kitakyushu-wood-l1-v1`, then `check … --mode teleop`. Pass: same 7+7 joint values as v4, status draft, no datasets.
    v4 stays frozen (no overwrite). Run the offline sim (log-049) on v5 **before** the robot: worst room ≥12°.
-5. [ ] Show v5 one arm at a time: leaders with `POSE_SET=… pico_leader_receiver.sh <side> | tee runs/<tag>-receiver.log`
+5. [x] (15:1x, all four PASS) Show v5 one arm at a time: leaders with `POSE_SET=… pico_leader_receiver.sh <side> | tee runs/<tag>-receiver.log`
    + a hold-only sender; followers with `hold_pose.py --pose …-pico-v5/<side>.yaml | tee`. Measure every arm
    (`openarm_pose_monitor.py`, save csv). Pass: leaders ≤2° on every joint, followers ≤2.5° on joint_7 and ≤1.5° others,
    no drops. Stop: any drop or jump → e-stop, log, end. esc/Ctrl-C only with the arm supported (R4).
 
 **C. Room check (leader, Katsuya + Suraj)**
-6. [ ] Recenter (Home 2 s) and check facing ±15° before every block. 2 cm steps first (R1): forward, left, up.
-7. [ ] 10 cm out-and-back per direction, one squeeze each. Pass per arm: max `TCP moved` ≤10 cm (>12 cm: stop,
+6. [x] (16:0x) Recenter (Home 2 s) and check facing ±15° before every block. 2 cm steps first (R1): forward, left, up.
+7. [x] (fwd / side / up both leaders, ≥11-16°; back / other side / down not recorded) 10 cm out-and-back per direction, one squeeze each. Pass per arm: max `TCP moved` ≤10 cm (>12 cm: stop,
    re-brief), no joint-limit WALL, no FAULT, least room ≥10° on every joint (sender log analysis as in log-049).
-8. [ ] Wrist dry run (item 10): `POSE_SET=… bash scripts/wrist_dry_run.sh left|right`, README table PASS both arms.
+8. [~] (dry run NOT passed; wrist max on both leaders by Suraj's decision: 61-109°, WALL at j5/j6/j7/j2) Wrist dry run (item 10): `POSE_SET=… bash scripts/wrist_dry_run.sh left|right`, README table PASS both arms.
    Only then 10° yaw, roll, pitch (pitch last) on the leader; 20° only after Kento's OK (runbook: no 20° turns).
 9. [ ] If a joint fails step 7/8: a new set name (v6 …), offline sim, back to 5. Max 2 rounds, then ask Kento.
 
