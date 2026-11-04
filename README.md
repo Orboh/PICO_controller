@@ -26,18 +26,56 @@ PICO ─Wi-Fi─ PC Service :63901 ─ xrobotoolkit_sdk :60061 ─ pico_teleop (
 
 First real-arm sessions: 2026-10-31, left arm, supervised (log-010).
 
-## Plan in progress (2026-11-01, wall fix log-030)
-1. [x] Offline: finish the replays old vs new (today's locked runs + session 4 + pilot redo): no edge locks, no creep
-2. [x] If replays still lock on `IK jumped` at an edge: treat it as a WALL there, test, replay again
-3. [x] log-030 + commit (deferred: limit avoidance in wrist mode; not possible: headset wall signal / vibration)
-4. [x] Elephant + Goldfish review of the day (log-035): code fixes applied; **process gap: steps 5 ran minutes after the commit, before this review**
-5. [x] Arm: wall check PASS on the left arm (log-034: 94 walls, no lock): joint-limit, drift and rotation walls seen; **stretched-arm / out-of-reach / joint-jump walls not yet seen on the robot**
-6. [ ] Repeat R2 right wrist (roll right, pitch) with the pre-move (Enter)
-7. [ ] PICO block × 5 (left) with the wall; wall time + slip per episode: page notes / `tools/wall_report.py` (log-047)
-8. [ ] Compare with the leader block (after Kento's joint_7 offset fix and a leader redo)
-Side task: PICO video (FPV) with an on/off button on the controller (log-031): built, not used (Wi-Fi load).
-Jerk (log-032): `HZ=60 ACC=300` not yet on the arm (the wall checks ran with it off): needs its own supervised check before recording with it.
-Before PICO data collection (log-035): written approval (120° j1, right arm, wall behaviour), right-arm wall check, 60 Hz check, episode rule for wall time / slip, Kento's joint_7 offset.
+## Plan in progress (2026-11-04, start pose for PICO on leader + follower; log-048/049, reviewed by Elephant + Goldfish)
+Goal: the PICO drives the leader and the follower from one start pose (wrists forward and firm, every joint with room);
+normal moves stop at a WALL, never a joint limit or FAULT. Kento's 11-04 tasks: 1 start pose (+ re-record the leader
+block), 2 two-arm PICO, 3 wall/slip report, 4 e98e987, 5 command channel. People: PICO operator Katsuya, spotter Suraj,
+keyboard person named per session. **Every robot step: one arm and one program at a time, `POSE_SET=` always given
+(CURRENT is the dropped wood-l1-pico-v1), no website, leader trigger untouched.**
+
+**A. Make it safe (no robot)**
+1. [ ] Right follower drop 11-04 13:04 (log-049): Suraj states the cause (e-stop / power cut) and Kota checks the arm
+   (`openarm_motorcheck.py --only can_fol_r`, all 8 answer, joints move freely by hand). **Until logged: no right follower.**
+2. [ ] Website stays off for this plan (it records and freezes sets; wrist switch not tied to item 10). New go/no-go
+   column for each session day: daily items 3, 4, 8 redone; item 5 without a `collect:` token until Kento names one;
+   item 7 scoped "PICO → leader only"; item 10 `pending` until step C2 passes; item 6 = the set's sha.
+3. [ ] Ask Kento (Slack thread): (a) leader-block wrist: A hold spring / B bilateral / C rest angle (log-048), since
+   leader_agent drops the wrist and the 13:38 gate started 54° off; (b) who gives the written OK for PICO → follower;
+   (c) restore CURRENT (Kota/Kento; not committed by us).
+
+**B. A clean start pose**
+4. [ ] `python3 scripts/pose_set.py new kitakyushu-takeei-v5-pico-v5 --from kitakyushu-takeei-v5-pico-v4 --scene
+   kitakyushu-wood-l1-v1`, then `check … --mode teleop`. Pass: same 7+7 joint values as v4, status draft, no datasets.
+   v4 stays frozen (no overwrite). Run the offline sim (log-049) on v5 **before** the robot: worst room ≥12°.
+5. [ ] Show v5 one arm at a time: leaders with `POSE_SET=… pico_leader_receiver.sh <side> | tee runs/<tag>-receiver.log`
+   + a hold-only sender; followers with `hold_pose.py --pose …-pico-v5/<side>.yaml | tee`. Measure every arm
+   (`openarm_pose_monitor.py`, save csv). Pass: leaders ≤2° on every joint, followers ≤2.5° on joint_7 and ≤1.5° others,
+   no drops. Stop: any drop or jump → e-stop, log, end. esc/Ctrl-C only with the arm supported (R4).
+
+**C. Room check (leader, Katsuya + Suraj)**
+6. [ ] Recenter (Home 2 s) and check facing ±15° before every block. 2 cm steps first (R1): forward, left, up.
+7. [ ] 10 cm out-and-back per direction, one squeeze each. Pass per arm: max `TCP moved` ≤10 cm (>12 cm: stop,
+   re-brief), no joint-limit WALL, no FAULT, least room ≥10° on every joint (sender log analysis as in log-049).
+8. [ ] Wrist dry run (item 10): `POSE_SET=… bash scripts/wrist_dry_run.sh left|right`, README table PASS both arms.
+   Only then 10° yaw, roll, pitch (pitch last) on the leader; 20° only after Kento's OK (runbook: no 20° turns).
+9. [ ] If a joint fails step 7/8: a new set name (v6 …), offline sim, back to 5. Max 2 rounds, then ask Kento.
+
+**D. Follower (only after the written OK from step 3b; right follower only after step 1)**
+10. [ ] Stop the leader receivers first (same ports, R2). `POSE_SET=… run_teleop_remote_<side>.sh` + sender; steps 6-8 per arm.
+
+**E. Hand-off**
+11. [ ] Re-record the leader block (task 1) with Kento's choice from step 3a.
+12. [ ] openarm-orboh PR from `main`: only the final set folder (not CURRENT, exp-pipe, v1-v4); 作業者: Sun (Suraj).
+    The junk gate run/dataset (11-04 13:38) stays until Kota decides (AGENTS §3.7).
+13. [ ] PICO-controller branch + PR: `pico_leader_receiver.sh`, `arm_session.sh`, runbook (dated column + a "PICO →
+    leader" procedure: receiver, calibration copy, no leader_agent, leader PSU, gripper), log-048/049 + the new log.
+    Not the other sessions' gui files / tests.
+14. [ ] Slack reply to Kento (draft to Suraj first): values + name; wrists forward instead of "joint_7 = PICO start";
+    right joint_2; the 11-04 review problems (wrist on a follower, item 5, v4 frozen, right drop); gripper gains
+    (leader kp 16 vs follower 25 via the receiver); task 4: e98e987 already on GitHub.
+Later: Kento tasks 2 (two-arm PICO), 3 (`tools/wall_report.py`), 5 (command channel) — one plan each.
+Carried from 11-01: R2 right wrist with pre-move; PICO block × 5 with the wall; compare with the leader block; 60 Hz /
+ACC=300 check before recording with it.
 
 ## To do after the PICO data collection
 - [ ] **joint_7 start offset (Kento):** in leader-arm mode the follower starts with joint_7 ≈ +25°, the pose set
